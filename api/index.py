@@ -67,7 +67,8 @@ async def process_stt(request: STTRequest):
             raise HTTPException(status_code=400, detail="서버에 Gemini API Key가 설정되지 않았습니다.")
             
         try:
-             temp_dir = tempfile.gettempdir()
+            # 들여쓰기 완벽하게 수정됨
+            temp_dir = tempfile.gettempdir()
             audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
             
             # 🚨 수정된 부분: 유튜브 봇 차단 우회 옵션 추가
