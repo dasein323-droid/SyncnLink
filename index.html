@@ -119,23 +119,20 @@
             <div class="form-group"><label data-i18n="titleLabel">문서 제목</label><input type="text" id="wiki-title"></div>
             <div class="form-group"><label data-i18n="descLabel">상세 해설 콘텐츠</label><textarea id="wiki-desc"></textarea></div>
             <div style="display:flex; gap:10px; justify-content: flex-end; margin-top: 20px;">
-                <button class="btn btn-outline" data-i18n="cancelBtn" onclick="switchPage('archive')">취소</button>
-                <button class="btn" data-i18n="saveBtn" onclick="saveWiki()">저장 및 연동하기</button>
+                <button class="btn btn-outline" data-i18n="cancelBtn" onclick="window.cancelEdit()">취소</button>
+                <button class="btn" data-i18n="saveBtn" onclick="window.saveWiki()">저장 및 연동하기</button>
             </div>
         </div>
     </div>
 </div>
 
-<!-- YouTube API -->
 <script src="https://www.youtube.com/iframe_api"></script>
 
-<!-- Firebase 연동 스크립트 -->
 <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-    import { getFirestore, collection, getDocs, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+    import { getFirestore, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-    // ★ 여기에 1단계에서 확인한 Firebase 설정값을 넣으세요 ★
     const firebaseConfig = {
         apiKey: "AIzaSyBOIM7PkgJf_Hr49qBhXtFNqnvdx3O87d8",
         authDomain: "synclink-c8a27.firebaseapp.com",
@@ -153,14 +150,13 @@
     window.archiveDb = [];
     window.currentLang = 'ko';
     window.currentSTTData = [];
+    window.editingId = null;
 
-    // 다국어 데이터
     window.i18nData = {
         ko: { urlPlaceholder: "유튜브 영상 주소를 입력하세요", loadVideo: "영상 로드 및 STT 시작", archiveBtn: "해설 아카이브", loginBtn: "Google 로그인", logoutBtn: "로그아웃", syncTitle: "실시간 자막 동기화 (STT)", statusWait: "대기 중", syncPlaceholder: "영상을 로드하면 STT 데이터 분석이 시작됩니다.", contextTitle: "문화적 맥락 및 심층 해설", contextPlaceholder: "자막의 강조된 단어를 클릭하여 해설을 확인하세요.", archiveTitle: "문화적 맥락 위키 아카이브", newWikiBtn: "+ 새 해설 작성", archiveEmpty: "아카이브된 해설이 없습니다.", editorTitle: "새 문화적 해설 작성", keywordLabel: "검색 키워드 (자막 내 단어와 정확히 일치)", categoryLabel: "카테고리", catEmotion: "정서 (Emotion)", catCustom: "사회적 관습 (Custom)", catHistory: "역사적 배경 (History)", titleLabel: "문서 제목", descLabel: "상세 해설 콘텐츠", cancelBtn: "취소", saveBtn: "저장 및 연동하기", apiAnalyzing: "API 분석 중...", apiSyncing: "실시간 동기화 중", apiError: "통신 실패", noSubtitle: "현재 재생 구간의 자막이 없습니다." },
         en: { urlPlaceholder: "Enter YouTube URL", loadVideo: "Load Video & STT", archiveBtn: "Archive", loginBtn: "Sign in", logoutBtn: "Sign out", syncTitle: "Real-time STT Sync", statusWait: "Waiting", syncPlaceholder: "Load a video to start STT analysis.", contextTitle: "Cultural Context & Explanation", contextPlaceholder: "Click a highlighted word to see the explanation.", archiveTitle: "Cultural Wiki Archive", newWikiBtn: "+ New Context", archiveEmpty: "Archive is empty.", editorTitle: "Create New Context", keywordLabel: "Target Keyword (Exact match)", categoryLabel: "Category", catEmotion: "Emotion", catCustom: "Social Custom", catHistory: "History", titleLabel: "Document Title", descLabel: "Detailed Explanation", cancelBtn: "Cancel", saveBtn: "Save & Link", apiAnalyzing: "API Analyzing...", apiSyncing: "Real-time Syncing", apiError: "Connection Failed", noSubtitle: "No subtitle available for this section." }
     };
 
-    // 로그인/로그아웃 처리
     const provider = new GoogleAuthProvider();
     document.getElementById('auth-btn').addEventListener('click', async () => {
         if (window.currentUser) {
@@ -176,7 +172,6 @@
         document.getElementById('auth-text').innerText = user ? window.i18nData[window.currentLang].logoutBtn : window.i18nData[window.currentLang].loginBtn;
     });
 
-    // Firestore에서 위키 데이터 불러오기
     window.loadWikiData = async function() {
         window.archiveDb = [];
         const querySnapshot = await getDocs(collection(db, "wiki_entries"));
@@ -186,7 +181,6 @@
         if (document.getElementById('page-archive').classList.contains('active')) window.renderArchive();
     };
 
-    // Firestore에 위키 데이터 저장하기
     window.saveWiki = async function() {
         if (!window.currentUser) return alert(window.currentLang === 'ko' ? "로그인이 필요합니다." : "Login required.");
         
@@ -199,25 +193,74 @@
         if(!keyword || !title) return alert(window.currentLang === 'ko' ? "키워드와 제목을 입력해주세요." : "Input required.");
 
         try {
-            await addDoc(collection(db, "wiki_entries"), {
-                keyword: keyword, category: category, title: title, description: desc,
-                createdBy: window.currentUser.uid, lastUpdatedAt: serverTimestamp()
-            });
+            if (window.editingId) {
+                const docRef = doc(db, "wiki_entries", window.editingId);
+                await updateDoc(docRef, {
+                    keyword: keyword, category: category, title: title, description: desc,
+                    lastUpdatedAt: serverTimestamp()
+                });
+                window.editingId = null;
+            } else {
+                await addDoc(collection(db, "wiki_entries"), {
+                    keyword: keyword, category: category, title: title, description: desc,
+                    createdBy: window.currentUser.uid, lastUpdatedAt: serverTimestamp()
+                });
+            }
             document.getElementById('wiki-keyword').value = ""; 
             document.getElementById('wiki-title').value = ""; 
             document.getElementById('wiki-desc').value = "";
             await window.loadWikiData();
             window.switchPage('archive');
         } catch (error) {
-            console.error("Error adding document: ", error);
+            console.error("Error saving document: ", error);
+            alert(window.currentLang === 'ko' ? "저장 중 오류가 발생했습니다." : "Error saving.");
         }
     };
 
-    // 초기 데이터 로드
+    window.editWiki = function(id) {
+        if (!window.currentUser) return alert(window.currentLang === 'ko' ? "로그인이 필요합니다." : "Login required.");
+        const wiki = window.archiveDb.find(w => w.id === id);
+        if (!wiki) return;
+
+        window.editingId = id;
+        document.getElementById('wiki-keyword').value = wiki.keyword;
+        document.getElementById('wiki-title').value = wiki.title;
+        document.getElementById('wiki-desc').value = wiki.description || "";
+
+        const catSelect = document.getElementById('wiki-category');
+        for(let i=0; i<catSelect.options.length; i++) {
+            if(catSelect.options[i].text.includes(wiki.category)) {
+                catSelect.selectedIndex = i;
+                break;
+            }
+        }
+        window.switchPage('editor');
+    };
+
+    window.deleteWiki = async function(id) {
+        if (!window.currentUser) return alert(window.currentLang === 'ko' ? "로그인이 필요합니다." : "Login required.");
+        if (!confirm(window.currentLang === 'ko' ? "정말 삭제하시겠습니까?" : "Are you sure?")) return;
+
+        try {
+            await deleteDoc(doc(db, "wiki_entries", id));
+            await window.loadWikiData();
+        } catch (error) {
+            console.error("Error deleting document: ", error);
+            alert("삭제 중 오류가 발생했습니다.");
+        }
+    };
+
+    window.cancelEdit = function() {
+        window.editingId = null;
+        document.getElementById('wiki-keyword').value = "";
+        document.getElementById('wiki-title').value = "";
+        document.getElementById('wiki-desc').value = "";
+        window.switchPage('archive');
+    };
+
     window.loadWikiData();
 </script>
 
-<!-- UI 및 플레이어 제어 스크립트 -->
 <script>
     let player;
     let syncInterval;
@@ -241,7 +284,6 @@
         statusBadge.innerText = window.i18nData[window.currentLang].apiAnalyzing;
 
         try {
-            // Vercel Serverless API 호출
             const response = await fetch('/api/stt', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -302,14 +344,34 @@
 
     function renderArchive() {
         const list = document.getElementById('archive-list');
-        if (window.archiveDb.length === 0) { list.innerHTML = `<p class="archive-empty">${window.i18nData[window.currentLang].archiveEmpty}</p>`; return; }
-        list.innerHTML = window.archiveDb.map(wiki => `<div class="archive-item"><div><h3>${wiki.title} <span class="badge">${wiki.category}</span></h3><p>Keyword: <strong>${wiki.keyword}</strong></p></div></div>`).join('');
+        if (window.archiveDb.length === 0) { 
+            list.innerHTML = `<p class="archive-empty">${window.i18nData[window.currentLang].archiveEmpty}</p>`; 
+            return; 
+        }
+        list.innerHTML = window.archiveDb.map(wiki => `
+            <div class="archive-item">
+                <div class="archive-info">
+                    <h3>${wiki.title} <span class="badge">${wiki.category}</span></h3>
+                    <p>Keyword: <strong>${wiki.keyword}</strong></p>
+                </div>
+                <div style="display:flex; gap: 8px;">
+                    <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="window.editWiki('${wiki.id}')">수정</button>
+                    <button class="btn" style="padding: 4px 8px; font-size: 0.75rem; background: #ff7675; border:none; color: white;" onclick="window.deleteWiki('${wiki.id}')">삭제</button>
+                </div>
+            </div>
+        `).join('');
     }
 
     function checkAuthAndSwitch(page) {
         if (page === 'editor' && !window.currentUser) {
             alert(window.currentLang === 'ko' ? "로그인이 필요합니다." : "Login required.");
             return;
+        }
+        if (page === 'editor') {
+            window.editingId = null;
+            document.getElementById('wiki-keyword').value = "";
+            document.getElementById('wiki-title').value = "";
+            document.getElementById('wiki-desc').value = "";
         }
         switchPage(page);
     }
