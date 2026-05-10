@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sync&Link - 문화적 맥락 동기화 시스템</title>
+    <style>
+        :root {
+            --primary-dark: #1A1510; --accent-main: #F4C46B; --accent-hover: #8B6508;
+            --bg-color: #FFF3D8; --text-main: #1A1510; --card-bg: #FFFFFF;
+            --emotion-color: #8B6508; --custom-color: #A67B5B; --history-color: #6B4E31;
+        }
+        body { font-family: 'Pretendard', sans-serif; background-color: var(--bg-color); margin: 0; padding: 0; color: var(--text-main); }
+        nav { background: var(--primary-dark); color: var(--bg-color); padding: 0.8rem 2rem; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .nav-left { display: flex; align-items: center; gap: 30px; flex: 1; }
+        nav h1 { margin: 0; font-size: 1.4rem; cursor: pointer; color: var(--accent-main); letter-spacing: 1px; }
+        .url-input-container { display: flex; gap: 8px; background: rgba(255,255,255,0.1); padding: 4px; border-radius: 6px; width: 100%; max-width: 500px; border: 1px solid rgba(244,196,107,0.3); }
+        .url-input-container input { flex: 1; border: none; padding: 6px 12px; outline: none; background: transparent; color: var(--bg-color); font-size: 0.85rem; }
+        .url-input-container input::placeholder { color: rgba(255,243,216,0.6); }
+        .nav-right { display: flex; gap: 15px; align-items: center; }
+        .btn { background: var(--accent-main); color: var(--primary-dark); border: none; padding: 7px 14px; border-radius: 5px; cursor: pointer; font-weight: 700; font-size: 0.85rem; transition: all 0.2s; }
+        .btn:hover { background: var(--accent-hover); color: var(--bg-color); }
+        .btn-load { background: var(--bg-color); color: var(--primary-dark); }
+        .btn-outline { background: transparent; border: 1px solid var(--accent-main); color: var(--accent-main); }
+        .btn-outline:hover { background: var(--accent-main); color: var(--primary-dark); }
+        .btn-google { background: white; color: var(--primary-dark); display: flex; align-items: center; gap: 8px; }
+        .page { display: none; padding-bottom: 50px; }
+        .page.active { display: block; }
+        .content-container { max-width: 1000px; margin: 25px auto; padding: 0 20px; display: flex; flex-direction: column; gap: 20px; }
+        .video-wrapper { width: 100%; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 16/9; position: relative; box-shadow: 0 10px 25px rgba(26,21,16,0.2); }
+        .video-wrapper iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
+        .info-stack { display: flex; flex-direction: column; gap: 20px; width: 100%; }
+        .card { background: var(--card-bg); border-radius: 12px; padding: 25px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-top: 4px solid var(--primary-dark); box-sizing: border-box; }
+        .section-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 15px; border-bottom: 2px solid var(--bg-color); padding-bottom: 10px; color: var(--primary-dark); display: flex; justify-content: space-between; align-items: center; }
+        .subtitle-box { min-height: 100px; }
+        .original-txt { font-size: 1.25rem; line-height: 1.6; margin-bottom: 12px; font-weight: 600; color: var(--primary-dark); }
+        .translated-txt { color: var(--accent-hover); font-size: 1.05rem; }
+        .c-link { color: var(--accent-hover); text-decoration: underline; cursor: pointer; font-weight: 700; }
+        .badge { font-size: 0.7rem; padding: 3px 8px; border-radius: 6px; color: var(--bg-color); margin-left: 6px; vertical-align: middle; background: var(--emotion-color); }
+        .placeholder { color: var(--accent-hover); opacity: 0.6; text-align: center; padding: 30px 0; font-weight: 500; }
+        .status-badge { font-size: 0.8rem; padding: 4px 10px; border-radius: 20px; font-weight: bold; }
+        .status-idle { background: #eee; color: #666; }
+        .status-loading { background: #ffeaa7; color: #d35400; animation: pulse 1.5s infinite; }
+        .status-live { background: #55efc4; color: #00b894; }
+        .status-error { background: #ff7675; color: #fff; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        .archive-wrapper { max-width: 900px; margin: 40px auto; padding: 0 20px; }
+        .archive-empty { text-align: center; color: var(--accent-hover); opacity: 0.7; padding: 50px 0; }
+        .archive-item { background: white; padding: 20px; border-radius: 10px; margin-bottom: 15px; border-left: 5px solid var(--accent-main); display: flex; justify-content: space-between; align-items: flex-start; }
+        .archive-info h3 { margin: 0 0 10px 0; font-size: 1.1rem; color: var(--primary-dark); }
+        .archive-info p { margin: 0; color: #555; font-size: 0.95rem; }
+        .form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+        .form-group label { font-weight: 700; font-size: 0.95rem; color: var(--primary-dark); }
+        .form-group input, .form-group select, .form-group textarea { padding: 12px; border: 1px solid #E2E8F0; border-radius: 6px; outline: none; font-size: 0.95rem; }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--accent-main); }
+        .form-group textarea { min-height: 150px; resize: vertical; }
+        @media (max-width: 800px) { .nav-left { flex-direction: column; align-items: flex-start; gap: 10px; } .nav-right { flex-wrap: wrap; } }
+    </style>
+</head>
+<body>
+
+<nav>
+    <div class="nav-left">
+        <h1 onclick="switchPage('player')">Sync&Link</h1>
+        <div class="url-input-container" id="url-box">
+            <input type="text" id="youtube-url" data-i18n-placeholder="urlPlaceholder" placeholder="유튜브 영상 주소를 입력하세요">
+            <button class="btn btn-load" data-i18n="loadVideo" onclick="requestSTTAnalysis()">영상 로드 및 STT 시작</button>
+        </div>
+    </div>
+    <div class="nav-right">
+        <button class="btn btn-outline" id="lang-toggle" onclick="toggleLanguage()">🌐 EN</button>
+        <button class="btn btn-outline" data-i18n="archiveBtn" onclick="switchPage('archive')">해설 아카이브</button>
+        <button class="btn btn-google" id="auth-btn">
+            <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_Reference_Icon.svg" width="16" alt="G">
+            <span id="auth-text" data-i18n="loginBtn">Google 로그인</span>
+        </button>
+    </div>
+</nav>
+
+<div id="page-player" class="page active">
+    <div class="content-container">
+        <div class="video-wrapper"><div id="player"></div></div>
+        <div class="info-stack">
+            <div class="card subtitle-box">
+                <div class="section-title">
+                    <span data-i18n="syncTitle">실시간 자막 동기화 (STT)</span>
+                    <span id="stt-status" class="status-badge status-idle" data-i18n="statusWait">대기 중</span>
+                </div>
+                <div id="subtitle-content">
+                    <p class="placeholder" data-i18n="syncPlaceholder">영상을 로드하면 STT 데이터 분석이 시작됩니다.</p>
+                </div>
+            </div>
+            <div class="card" id="explanation-card">
+                <div class="section-title" data-i18n="contextTitle">문화적 맥락 및 심층 해설</div>
+                <div id="explanation-content">
+                    <p class="placeholder" data-i18n="contextPlaceholder">자막의 강조된 단어를 클릭하여 해설을 확인하세요.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="page-archive" class="page">
+    <div class="archive-wrapper">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:25px;">
+            <h2 style="color: var(--primary-dark); margin: 0;" data-i18n="archiveTitle">문화적 맥락 위키 아카이브</h2>
+            <button class="btn" data-i18n="newWikiBtn" onclick="checkAuthAndSwitch('editor')">+ 새 해설 작성</button>
+        </div>
+        <div id="archive-list"><p class="archive-empty" data-i18n="archiveEmpty">아카이브가 비어 있습니다.</p></div>
+    </div>
+</div>
+
+<div id="page-editor" class="page">
+    <div class="content-container">
+        <div class="card">
+            <div class="section-title" style="font-size: 1.2rem; border-bottom: none;" data-i18n="editorTitle">새 문화적 해설 작성</div>
+            <div class="form-group"><label data-i18n="keywordLabel">검색 키워드 (자막 내 단어와 정확히 일치)</label><input type="text" id="wiki-keyword"></div>
+            <div class="form-group"><label data-i18n="categoryLabel">카테고리</label><select id="wiki-category"><option value="정서" data-i18n="catEmotion">정서 (Emotion)</option><option value="관습" data-i18n="catCustom">사회적 관습 (Custom)</option><option value="역사" data-i18n="catHistory">역사적 배경 (History)</option></select></div>
+            <div class="form-group"><label data-i18n="titleLabel">문서 제목</label><input type="text" id="wiki-title"></div>
+            <div class="form-group"><label data-i18n="descLabel">상세 해설 콘텐츠</label><textarea id="wiki-desc"></textarea></div>
+            <div style="display:flex; gap:10px; justify-content: flex-end; margin-top: 20px;">
+                <button class="btn btn-outline" data-i18n="cancelBtn" onclick="switchPage('archive')">취소</button>
+                <button class="btn" data-i18n="saveBtn" onclick="saveWiki()">저장 및 연동하기</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- YouTube API -->
+<script src="https://www.youtube.com/iframe_api"></script>
+
+<!-- Firebase 연동 스크립트 -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+    import { getFirestore, collection, getDocs, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    // ★ 여기에 1단계에서 확인한 Firebase 설정값을 넣으세요 ★
+    const firebaseConfig = {
+        apiKey: "YOUR_API_KEY",
+        authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+        projectId: "YOUR_PROJECT_ID",
+        storageBucket: "YOUR_PROJECT_ID.appspot.com",
+        messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+        appId: "YOUR_APP_ID"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    
+    window.currentUser = null;
+    window.archiveDb = [];
+    window.currentLang = 'ko';
+    window.currentSTTData = [];
+
+    // 다국어 데이터
+    window.i18nData = {
+        ko: { urlPlaceholder: "유튜브 영상 주소를 입력하세요", loadVideo: "영상 로드 및 STT 시작", archiveBtn: "해설 아카이브", loginBtn: "Google 로그인", logoutBtn: "로그아웃", syncTitle: "실시간 자막 동기화 (STT)", statusWait: "대기 중", syncPlaceholder: "영상을 로드하면 STT 데이터 분석이 시작됩니다.", contextTitle: "문화적 맥락 및 심층 해설", contextPlaceholder: "자막의 강조된 단어를 클릭하여 해설을 확인하세요.", archiveTitle: "문화적 맥락 위키 아카이브", newWikiBtn: "+ 새 해설 작성", archiveEmpty: "아카이브된 해설이 없습니다.", editorTitle: "새 문화적 해설 작성", keywordLabel: "검색 키워드 (자막 내 단어와 정확히 일치)", categoryLabel: "카테고리", catEmotion: "정서 (Emotion)", catCustom: "사회적 관습 (Custom)", catHistory: "역사적 배경 (History)", titleLabel: "문서 제목", descLabel: "상세 해설 콘텐츠", cancelBtn: "취소", saveBtn: "저장 및 연동하기", apiAnalyzing: "API 분석 중...", apiSyncing: "실시간 동기화 중", apiError: "통신 실패", noSubtitle: "현재 재생 구간의 자막이 없습니다." },
+        en: { urlPlaceholder: "Enter YouTube URL", loadVideo: "Load Video & STT", archiveBtn: "Archive", loginBtn: "Sign in", logoutBtn: "Sign out", syncTitle: "Real-time STT Sync", statusWait: "Waiting", syncPlaceholder: "Load a video to start STT analysis.", contextTitle: "Cultural Context & Explanation", contextPlaceholder: "Click a highlighted word to see the explanation.", archiveTitle: "Cultural Wiki Archive", newWikiBtn: "+ New Context", archiveEmpty: "Archive is empty.", editorTitle: "Create New Context", keywordLabel: "Target Keyword (Exact match)", categoryLabel: "Category", catEmotion: "Emotion", catCustom: "Social Custom", catHistory: "History", titleLabel: "Document Title", descLabel: "Detailed Explanation", cancelBtn: "Cancel", saveBtn: "Save & Link", apiAnalyzing: "API Analyzing...", apiSyncing: "Real-time Syncing", apiError: "Connection Failed", noSubtitle: "No subtitle available for this section." }
+    };
+
+    // 로그인/로그아웃 처리
+    const provider = new GoogleAuthProvider();
+    document.getElementById('auth-btn').addEventListener('click', async () => {
+        if (window.currentUser) {
+            await signOut(auth);
+        } else {
+            try { await signInWithPopup(auth, provider); } 
+            catch (error) { console.error("Login Failed:", error); }
+        }
+    });
+
+    onAuthStateChanged(auth, (user) => {
+        window.currentUser = user;
+        document.getElementById('auth-text').innerText = user ? window.i18nData[window.currentLang].logoutBtn : window.i18nData[window.currentLang].loginBtn;
+    });
+
+    // Firestore에서 위키 데이터 불러오기
+    window.loadWikiData = async function() {
+        window.archiveDb = [];
+        const querySnapshot = await getDocs(collection(db, "wiki_entries"));
+        querySnapshot.forEach((doc) => {
+            window.archiveDb.push({ id: doc.id, ...doc.data() });
+        });
+        if (document.getElementById('page-archive').classList.contains('active')) window.renderArchive();
+    };
+
+    // Firestore에 위키 데이터 저장하기
+    window.saveWiki = async function() {
+        if (!window.currentUser) return alert(window.currentLang === 'ko' ? "로그인이 필요합니다." : "Login required.");
+        
+        const keyword = document.getElementById('wiki-keyword').value;
+        const categorySelect = document.getElementById('wiki-category');
+        const category = categorySelect.options[categorySelect.selectedIndex].text.split(' ')[0];
+        const title = document.getElementById('wiki-title').value;
+        const desc = document.getElementById('wiki-desc').value;
+
+        if(!keyword || !title) return alert(window.currentLang === 'ko' ? "키워드와 제목을 입력해주세요." : "Input required.");
+
+        try {
+            await addDoc(collection(db, "wiki_entries"), {
+                keyword: keyword, category: category, title: title, description: desc,
+                createdBy: window.currentUser.uid, lastUpdatedAt: serverTimestamp()
+            });
+            document.getElementById('wiki-keyword').value = ""; 
+            document.getElementById('wiki-title').value = ""; 
+            document.getElementById('wiki-desc').value = "";
+            await window.loadWikiData();
+            window.switchPage('archive');
+        } catch (error) {
+            console.error("Error adding document: ", error);
+        }
+    };
+
+    // 초기 데이터 로드
+    window.loadWikiData();
+</script>
+
+<!-- UI 및 플레이어 제어 스크립트 -->
+<script>
+    let player;
+    let syncInterval;
+
+    function onYouTubeIframeAPIReady() {
+        player = new YT.Player('player', {
+            height: '100%', width: '100%', videoId: '',
+            playerVars: { 'playsinline': 1, 'controls': 1, 'origin': window.location.origin },
+            events: { 'onStateChange': onPlayerStateChange }
+        });
+    }
+
+    async function requestSTTAnalysis() {
+        const url = document.getElementById('youtube-url').value;
+        const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([^#&?]*)/);
+        if (!idMatch || !idMatch[1]) return alert(window.currentLang === 'ko' ? "유효한 유튜브 영상 링크를 입력해주세요." : "Invalid YouTube URL.");
+
+        player.loadVideoById(idMatch[1]);
+        const statusBadge = document.getElementById('stt-status');
+        statusBadge.className = 'status-badge status-loading';
+        statusBadge.innerText = window.i18nData[window.currentLang].apiAnalyzing;
+
+        try {
+            // Vercel Serverless API 호출
+            const response = await fetch('/api/stt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url, lang: window.currentLang })
+            });
+            if (!response.ok) throw new Error("서버 응답 오류");
+            
+            const result = await response.json();
+            window.currentSTTData = result.data;
+            statusBadge.className = 'status-badge status-live';
+            statusBadge.innerText = window.i18nData[window.currentLang].apiSyncing;
+            updateSync();
+        } catch (error) {
+            console.error(error);
+            statusBadge.className = 'status-badge status-error';
+            statusBadge.innerText = window.i18nData[window.currentLang].apiError;
+        }
+    }
+
+    function onPlayerStateChange(event) {
+        if (event.data == YT.PlayerState.PLAYING) syncInterval = setInterval(updateSync, 100); 
+        else clearInterval(syncInterval); 
+    }
+
+    function updateSync() {
+        if (!window.currentSTTData || window.currentSTTData.length === 0) return;
+        const time = player.getCurrentTime();
+        const sub = window.currentSTTData.find(s => time >= s.start && time < s.end);
+        const container = document.getElementById('subtitle-content');
+
+        if (sub) {
+            let html = sub.original;
+            window.archiveDb.forEach(wiki => {
+                if (wiki.keyword && wiki.keyword.trim() !== "") {
+                    const regex = new RegExp(`(${wiki.keyword})`, "gi");
+                    if (html.match(regex)) {
+                        html = html.replace(regex, `<span class="c-link" onclick="showWikiDetail('${wiki.keyword}')">$1</span><span class="badge">${wiki.category}</span>`);
+                    }
+                }
+            });
+            container.innerHTML = `<div class="original-txt">${html}</div>`;
+        } else {
+            container.innerHTML = `<p class="placeholder">${window.i18nData[window.currentLang].noSubtitle}</p>`;
+        }
+    }
+
+    function showWikiDetail(keyword) {
+        const wiki = window.archiveDb.find(w => w.keyword.toLowerCase() === keyword.toLowerCase());
+        if (wiki) {
+            document.getElementById('explanation-content').innerHTML = `
+                <div style="animation: fadeIn 0.3s;">
+                    <h3 style="margin-top:0; color: var(--primary-dark);">${wiki.title} <span class="badge">${wiki.category}</span></h3>
+                    <p style="line-height:1.7; color: var(--text-main);">${wiki.description}</p>
+                </div>
+            `;
+        }
+    }
+
+    function renderArchive() {
+        const list = document.getElementById('archive-list');
+        if (window.archiveDb.length === 0) { list.innerHTML = `<p class="archive-empty">${window.i18nData[window.currentLang].archiveEmpty}</p>`; return; }
+        list.innerHTML = window.archiveDb.map(wiki => `<div class="archive-item"><div><h3>${wiki.title} <span class="badge">${wiki.category}</span></h3><p>Keyword: <strong>${wiki.keyword}</strong></p></div></div>`).join('');
+    }
+
+    function checkAuthAndSwitch(page) {
+        if (page === 'editor' && !window.currentUser) {
+            alert(window.currentLang === 'ko' ? "로그인이 필요합니다." : "Login required.");
+            return;
+        }
+        switchPage(page);
+    }
+
+    function switchPage(p) {
+        document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
+        document.getElementById(`page-${p}`).classList.add('active');
+        document.getElementById('url-box').style.visibility = p === 'player' ? 'visible' : 'hidden';
+        if (p === 'archive') renderArchive();
+    }
+
+    function toggleLanguage() {
+        window.currentLang = window.currentLang === 'ko' ? 'en' : 'ko';
+        document.getElementById('lang-toggle').innerText = window.currentLang === 'ko' ? '🌐 EN' : '🌐 KO';
+        document.querySelectorAll('[data-i18n]').forEach(el => el.innerText = window.i18nData[window.currentLang][el.getAttribute('data-i18n')]);
+        document.querySelectorAll('[data-i18n-placeholder]').forEach(el => el.placeholder = window.i18nData[window.currentLang][el.getAttribute('data-i18n-placeholder')]);
+        document.getElementById('auth-text').innerText = window.currentUser ? window.i18nData[window.currentLang].logoutBtn : window.i18nData[window.currentLang].loginBtn;
+        if (document.getElementById('page-archive').classList.contains('active')) renderArchive();
+    }
+</script>
+</body>
+</html>
