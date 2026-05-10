@@ -43,8 +43,8 @@ async def process_stt(request: STTRequest):
     if cache_doc.exists:
         return {"status": "success", "data": cache_doc.to_dict().get("sttData")}
 
+    # [STEP 1] 유튜브 자막 1차 시도
     try:
-        # [STEP 1] 유튜브 자체 자막 추출 (1순위, 초고속)
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         try:
             transcript = transcript_list.find_transcript([request.lang]).fetch()
@@ -58,53 +58,47 @@ async def process_stt(request: STTRequest):
 
         formatted_data = [{"start": i["start"], "end": i["start"] + i["duration"], "original": i["text"]} for i in transcript]
 
+    # [STEP 2] 유튜브 자막이 아예 없는 경우 -> Gemini로 전환
     except Exception as e:
-        print(f"유튜브 자막 없음. Gemini STT로 전환 (비디오: {video_id})")
+        print(f"🎬 자막 없음 감지됨. Gemini STT로 분석을 시작합니다. (비디오: {video_id})")
         
-        # [STEP 2] 자막이 없는 경우: 무료 Gemini 1.5 Flash STT 사용
         gemini_key = os.getenv("GEMINI_API_KEY")
         if not gemini_key:
-            raise HTTPException(status_code=400, detail="자막이 없는 영상입니다. (GEMINI_API_KEY가 없습니다.)")
+            raise HTTPException(status_code=400, detail="서버에 Gemini API Key가 설정되지 않았습니다.")
             
         try:
-            # 1. 오디오 다운로드
             temp_dir = tempfile.gettempdir()
             audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
             
+            # Vercel 환경을 위한 안전한 다운로드 옵션 (FFmpeg 미사용)
             ydl_opts = {
-                'format': 'm4a/bestaudio/best',
+                'format': 'm4a/bestaudio',
                 'outtmpl': audio_path,
-                'max_filesize': 20000000, # 약 20MB 제한
+                'noplaylist': True,
+                'postprocessors': [], # 별도 인코딩 없이 원본 오디오만 다운로드
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([request.url])
                 
-            # 2. Gemini 설정 (빠른 응답을 위해 1.5-flash 모델 사용)
             genai.configure(api_key=gemini_key)
             model = genai.GenerativeModel('models/gemini-1.5-flash')
-            
-            # 3. Gemini 서버에 오디오 업로드
             audio_file = genai.upload_file(path=audio_path)
             
-            # 4. 프롬프트 요청 (JSON 형태로 자막 요구)
             prompt = f"""
             Listen to this audio and transcribe it in {request.lang} language. 
             Split the transcription into short sentences. 
             Estimate the 'start' and 'end' time (in seconds) for each sentence.
-            Return ONLY a valid JSON array format like this:
+            Return ONLY a valid JSON array format like this, nothing else:
             [
-              {{"start": 0.0, "end": 2.5, "original": "Hello world"}},
-              {{"start": 2.5, "end": 5.0, "original": "Next sentence"}}
+              {{"start": 0.0, "end": 2.5, "original": "Hello"}},
+              {{"start": 2.5, "end": 5.0, "original": "World"}}
             ]
-            Do not include any markdown tags (like ```json). Just the raw JSON.
             """
             
             response = model.generate_content([prompt, audio_file])
-            
-            # 5. 결과 파싱 및 정리
             result_text = response.text.strip()
-            # markdown 코드가 섞여 올 경우를 대비한 제거 로직
+            
             if result_text.startswith("```json"):
                 result_text = result_text[7:-3]
             elif result_text.startswith("```"):
@@ -112,17 +106,17 @@ async def process_stt(request: STTRequest):
                 
             formatted_data = json.loads(result_text)
             
-            # 서버 용량 관리를 위해 임시 파일 삭제
+            # 임시 파일 삭제
             if os.path.exists(audio_path):
                 os.remove(audio_path)
-            genai.delete_file(audio_file.name) # 구글 서버에서도 삭제
+            genai.delete_file(audio_file.name)
 
         except Exception as gemini_err:
             error_msg = traceback.format_exc()
-            print("Gemini STT 처리 실패:\n", error_msg)
-            raise HTTPException(status_code=500, detail="영상이 너무 길거나 음성 분석에 실패했습니다.")
+            print("🚨 Gemini STT 처리 최종 실패:\n", error_msg)
+            raise HTTPException(status_code=500, detail="영상이 너무 길거나 자막을 생성할 수 없습니다.")
 
-    # 3. Firestore 캐시 저장 (성공했을 때만)
+    # 3. 데이터베이스(Firestore) 저장
     cache_ref.set({
         "sttData": formatted_data,
         "language": request.lang,
