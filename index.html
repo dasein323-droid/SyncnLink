@@ -46,7 +46,7 @@
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
         .archive-wrapper { max-width: 900px; margin: 40px auto; padding: 0 20px; }
         .archive-empty { text-align: center; color: var(--accent-hover); opacity: 0.7; padding: 50px 0; }
-        .archive-item { background: white; padding: 20px; border-radius: 10px; margin-bottom: 15px; border-left: 5px solid var(--accent-main); display: flex; justify-content: space-between; align-items: flex-start; }
+        .archive-item { background: white; padding: 20px; border-radius: 10px; margin-bottom: 15px; border-left: 5px solid var(--accent-main); }
         .archive-info h3 { margin: 0 0 10px 0; font-size: 1.1rem; color: var(--primary-dark); }
         .archive-info p { margin: 0; color: #555; font-size: 0.95rem; }
         .form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
@@ -114,7 +114,7 @@
     <div class="content-container">
         <div class="card">
             <div class="section-title" style="font-size: 1.2rem; border-bottom: none;" data-i18n="editorTitle">새 문화적 해설 작성</div>
-            <div class="form-group"><label data-i18n="keywordLabel">검색 키워드 </label><input type="text" id="wiki-keyword"></div>
+            <div class="form-group"><label data-i18n="keywordLabel">검색 키워드 (자막 내 단어와 정확히 일치)</label><input type="text" id="wiki-keyword"></div>
             <div class="form-group"><label data-i18n="categoryLabel">카테고리</label><select id="wiki-category"><option value="정서" data-i18n="catEmotion">정서 (Emotion)</option><option value="관습" data-i18n="catCustom">사회적 관습 (Custom)</option><option value="역사" data-i18n="catHistory">역사적 배경 (History)</option></select></div>
             <div class="form-group"><label data-i18n="titleLabel">문서 제목</label><input type="text" id="wiki-title"></div>
             <div class="form-group"><label data-i18n="descLabel">상세 해설 콘텐츠</label><textarea id="wiki-desc"></textarea></div>
@@ -342,22 +342,36 @@
         }
     }
 
+    // [추가] 아카이브 상세 해설 토글 함수
+    window.toggleWikiDesc = function(id) {
+        const descEl = document.getElementById(`desc-${id}`);
+        if (descEl.style.display === 'none') {
+            descEl.style.display = 'block';
+        } else {
+            descEl.style.display = 'none';
+        }
+    };
+
     function renderArchive() {
         const list = document.getElementById('archive-list');
         if (window.archiveDb.length === 0) { 
             list.innerHTML = `<p class="archive-empty">${window.i18nData[window.currentLang].archiveEmpty}</p>`; 
             return; 
         }
+        // [변경] 키워드 클릭 시 토글되도록 구조 및 스타일 수정
         list.innerHTML = window.archiveDb.map(wiki => `
-            <div class="archive-item">
-                <div class="archive-info">
-                    <h3>${wiki.title} <span class="badge">${wiki.category}</span></h3>
-                    <p>Keyword: <strong>${wiki.keyword}</strong></p>
+            <div class="archive-item" style="display: block;">
+                <div style="display:flex; justify-content: space-between; align-items: flex-start;">
+                    <div class="archive-info">
+                        <h3>${wiki.title} <span class="badge">${wiki.category}</span></h3>
+                        <p>Keyword: <strong style="cursor: pointer; text-decoration: underline; color: var(--accent-hover);" onclick="window.toggleWikiDesc('${wiki.id}')">${wiki.keyword}</strong> <span style="font-size:0.8rem; color:#888;">(클릭하여 해설 보기)</span></p>
+                    </div>
+                    <div style="display:flex; gap: 8px;">
+                        <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="window.editWiki('${wiki.id}')">수정</button>
+                        <button class="btn" style="padding: 4px 8px; font-size: 0.75rem; background: #ff7675; border:none; color: white;" onclick="window.deleteWiki('${wiki.id}')">삭제</button>
+                    </div>
                 </div>
-                <div style="display:flex; gap: 8px;">
-                    <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="window.editWiki('${wiki.id}')">수정</button>
-                    <button class="btn" style="padding: 4px 8px; font-size: 0.75rem; background: #ff7675; border:none; color: white;" onclick="window.deleteWiki('${wiki.id}')">삭제</button>
-                </div>
+                <div id="desc-${wiki.id}" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 1px dashed #ccc; font-size: 0.95rem; line-height: 1.6; white-space: pre-wrap; color: var(--text-main);">${wiki.description || '상세 해설이 없습니다.'}</div>
             </div>
         `).join('');
     }
