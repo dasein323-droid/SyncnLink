@@ -5,9 +5,13 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import os
 import re
-import traceback # 상세 에러 확인용
+import yt_dlp
+import google.generativeai as genai
+import tempfile
+import json
+import traceback
 
-# Vercel 환경변수에서 Firebase 인증 정보 로드
+# Firebase 초기화
 if not firebase_admin._apps:
     cred_json = {
         "type": "service_account",
@@ -28,14 +32,11 @@ class STTRequest(BaseModel):
 
 @app.post("/api/stt")
 async def process_stt(request: STTRequest):
-    # 유튜브 URL에서 Video ID 추출
     video_id_match = re.search(r"(?:v=|youtu\.be\/)([^&]+)", request.url)
     if not video_id_match:
-        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+        raise HTTPException(status_code=400, detail="유효하지 않은 유튜브 URL입니다.")
     
     video_id = video_id_match.group(1)
-
-    # 1. Firestore 캐시 확인 (비용 절감 및 속도 향상)
     cache_ref = db.collection("video_stt_cache").document(f"{video_id}_{request.lang}")
     cache_doc = cache_ref.get()
     
@@ -43,45 +44,89 @@ async def process_stt(request: STTRequest):
         return {"status": "success", "data": cache_doc.to_dict().get("sttData")}
 
     try:
-        # 2. 유튜브 자막 "스마트" 추출 로직
+        # [STEP 1] 유튜브 자체 자막 추출 (1순위, 초고속)
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        
         try:
-            # 시도 1: 사용자가 요청한 언어(예: 'ko')의 자막이 있는지 확인
             transcript = transcript_list.find_transcript([request.lang]).fetch()
         except:
-            # 시도 2: 요청한 언어가 없다면, 이용 가능한 아무 자막(자동생성 포함)이나 가져와서 요청한 언어로 자동 번역!
-            # 예: 영어 영상에 한국어 자막이 없으면 영어를 가져와서 한국어로 번역함
             for t in transcript_list:
                 if t.is_translatable:
                     transcript = t.translate(request.lang).fetch()
                     break
             else:
-                # 번역 가능한 자막조차 없는 경우
-                raise Exception("No translatable subtitles found for this video.")
+                raise Exception("번역 가능한 자막 없음")
 
-        # 데이터 포맷팅
-        formatted_data = []
-        for item in transcript:
-            formatted_data.append({
-                "start": item["start"],
-                "end": item["start"] + item["duration"],
-                "original": item["text"]
-            })
-
-        # 3. Firestore에 캐시 저장 (언어별로 따로 저장되도록 문서 ID에 언어코드 추가)
-        cache_ref.set({
-            "sttData": formatted_data,
-            "language": request.lang,
-            "processedAt": firestore.SERVER_TIMESTAMP
-        })
-
-        return {"status": "success", "data": formatted_data}
+        formatted_data = [{"start": i["start"], "end": i["start"] + i["duration"], "original": i["text"]} for i in transcript]
 
     except Exception as e:
-        # 🚨 Vercel Logs에 정확한 파이썬 에러 원인을 출력합니다.
-        error_msg = traceback.format_exc()
-        print(f"STT Error for Video {video_id}: \n", error_msg)
+        print(f"유튜브 자막 없음. Gemini STT로 전환 (비디오: {video_id})")
         
-        # 500 에러 대신 400 에러로 클라이언트에게 "자막이 없음"을 명확히 알림
-        raise HTTPException(status_code=400, detail="해당 영상에서 자막을 추출할 수 없거나 자막이 비활성화되어 있습니다.")
+        # [STEP 2] 자막이 없는 경우: 무료 Gemini 1.5 Flash STT 사용
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_key:
+            raise HTTPException(status_code=400, detail="자막이 없는 영상입니다. (GEMINI_API_KEY가 없습니다.)")
+            
+        try:
+            # 1. 오디오 다운로드
+            temp_dir = tempfile.gettempdir()
+            audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
+            
+            ydl_opts = {
+                'format': 'm4a/bestaudio/best',
+                'outtmpl': audio_path,
+                'max_filesize': 20000000, # 약 20MB 제한
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([request.url])
+                
+            # 2. Gemini 설정 (빠른 응답을 위해 1.5-flash 모델 사용)
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel('models/gemini-1.5-flash')
+            
+            # 3. Gemini 서버에 오디오 업로드
+            audio_file = genai.upload_file(path=audio_path)
+            
+            # 4. 프롬프트 요청 (JSON 형태로 자막 요구)
+            prompt = f"""
+            Listen to this audio and transcribe it in {request.lang} language. 
+            Split the transcription into short sentences. 
+            Estimate the 'start' and 'end' time (in seconds) for each sentence.
+            Return ONLY a valid JSON array format like this:
+            [
+              {{"start": 0.0, "end": 2.5, "original": "Hello world"}},
+              {{"start": 2.5, "end": 5.0, "original": "Next sentence"}}
+            ]
+            Do not include any markdown tags (like ```json). Just the raw JSON.
+            """
+            
+            response = model.generate_content([prompt, audio_file])
+            
+            # 5. 결과 파싱 및 정리
+            result_text = response.text.strip()
+            # markdown 코드가 섞여 올 경우를 대비한 제거 로직
+            if result_text.startswith("```json"):
+                result_text = result_text[7:-3]
+            elif result_text.startswith("```"):
+                result_text = result_text[3:-3]
+                
+            formatted_data = json.loads(result_text)
+            
+            # 서버 용량 관리를 위해 임시 파일 삭제
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+            genai.delete_file(audio_file.name) # 구글 서버에서도 삭제
+
+        except Exception as gemini_err:
+            error_msg = traceback.format_exc()
+            print("Gemini STT 처리 실패:\n", error_msg)
+            raise HTTPException(status_code=500, detail="영상이 너무 길거나 음성 분석에 실패했습니다.")
+
+    # 3. Firestore 캐시 저장 (성공했을 때만)
+    cache_ref.set({
+        "sttData": formatted_data,
+        "language": request.lang,
+        "processedAt": firestore.SERVER_TIMESTAMP
+    })
+
+    return {"status": "success", "data": formatted_data}
