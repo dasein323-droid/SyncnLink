@@ -67,15 +67,23 @@ async def process_stt(request: STTRequest):
             raise HTTPException(status_code=400, detail="서버에 Gemini API Key가 설정되지 않았습니다.")
             
         try:
-            temp_dir = tempfile.gettempdir()
+             temp_dir = tempfile.gettempdir()
             audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
             
-            # Vercel 환경을 위한 안전한 다운로드 옵션 (FFmpeg 미사용)
+            # 🚨 수정된 부분: 유튜브 봇 차단 우회 옵션 추가
             ydl_opts = {
                 'format': 'm4a/bestaudio',
                 'outtmpl': audio_path,
                 'noplaylist': True,
-                'postprocessors': [], # 별도 인코딩 없이 원본 오디오만 다운로드
+                # 안드로이드 모바일 클라이언트로 위장하여 봇 차단 회피
+                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                # 일반 크롬 브라우저로 위장
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us,en;q=0.5',
+                    'Sec-Fetch-Mode': 'navigate',
+                }
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
