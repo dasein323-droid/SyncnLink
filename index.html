@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sync&Link - 문화적 맥락 동기화 시스템</title>
+    <title>Sync&Link - 문화 동기화 시스템</title>
     <style>
         :root {
             --primary-dark: #1A1510; --accent-main: #F4C46B; --accent-hover: #8B6508;
@@ -64,7 +64,7 @@
         <h1 onclick="switchPage('player')">Sync&Link</h1>
         <div class="url-input-container" id="url-box">
             <input type="text" id="youtube-url" data-i18n-placeholder="urlPlaceholder" placeholder="유튜브 영상 주소를 입력하세요">
-            <button class="btn btn-load" data-i18n="loadVideo" onclick="requestSTTAnalysis()">영상 로드 및 STT 시작</button>
+            <button class="btn btn-load" data-i18n="loadVideo" onclick="requestSTTAnalysis()">영상 로드</button>
         </div>
     </div>
     <div class="nav-right">
@@ -83,7 +83,7 @@
         <div class="info-stack">
             <div class="card subtitle-box">
                 <div class="section-title">
-                    <span data-i18n="syncTitle">실시간 자막 동기화 (STT)</span>
+                    <span data-i18n="syncTitle">실시간 자막 동기화</span>
                     <span id="stt-status" class="status-badge status-idle" data-i18n="statusWait">대기 중</span>
                 </div>
                 <div id="subtitle-content">
@@ -113,14 +113,14 @@
 <div id="page-editor" class="page">
     <div class="content-container">
         <div class="card">
-            <div class="section-title" style="font-size: 1.2rem; border-bottom: none;" data-i18n="editorTitle">새 문화적 해설 작성</div>
-            <div class="form-group"><label data-i18n="keywordLabel">검색 키워드 (자막 내 단어와 정확히 일치)</label><input type="text" id="wiki-keyword"></div>
-            <div class="form-group"><label data-i18n="categoryLabel">카테고리</label><select id="wiki-category"><option value="정서" data-i18n="catEmotion">정서 (Emotion)</option><option value="관습" data-i18n="catCustom">사회적 관습 (Custom)</option><option value="역사" data-i18n="catHistory">역사적 배경 (History)</option></select></div>
+            <div class="section-title" style="font-size: 1.2rem; border-bottom: none;" data-i18n="editorTitle">새 아카이브 작성</div>
+            <div class="form-group"><label data-i18n="keywordLabel">검색 키워드</label><input type="text" id="wiki-keyword"></div>
+            <div class="form-group"><label data-i18n="categoryLabel">카테고리</label><select id="wiki-category"><option value="정서" data-i18n="catEmotion">정서 (Emotion)</option><option value="관습" data-i18n="catCustom">관습 (Custom)</option><option value="역사" data-i18n="catHistory">역사 (History)</option></select></div>
             <div class="form-group"><label data-i18n="titleLabel">문서 제목</label><input type="text" id="wiki-title"></div>
-            <div class="form-group"><label data-i18n="descLabel">상세 해설 콘텐츠</label><textarea id="wiki-desc"></textarea></div>
+            <div class="form-group"><label data-i18n="descLabel">상세 해설</label><textarea id="wiki-desc"></textarea></div>
             <div style="display:flex; gap:10px; justify-content: flex-end; margin-top: 20px;">
                 <button class="btn btn-outline" data-i18n="cancelBtn" onclick="window.cancelEdit()">취소</button>
-                <button class="btn" data-i18n="saveBtn" onclick="window.saveWiki()">저장 및 연동하기</button>
+                <button class="btn" data-i18n="saveBtn" onclick="window.saveWiki()">저장</button>
             </div>
         </div>
     </div>
@@ -153,8 +153,8 @@
     window.editingId = null;
 
     window.i18nData = {
-        ko: { urlPlaceholder: "유튜브 영상 주소를 입력하세요", loadVideo: "영상 로드 및 STT 시작", archiveBtn: "해설 아카이브", loginBtn: "Google 로그인", logoutBtn: "로그아웃", syncTitle: "실시간 자막 동기화 (STT)", statusWait: "대기 중", syncPlaceholder: "영상을 로드하면 STT 데이터 분석이 시작됩니다.", contextTitle: "문화적 맥락 및 심층 해설", contextPlaceholder: "자막의 강조된 단어를 클릭하여 해설을 확인하세요.", archiveTitle: "문화적 맥락 위키 아카이브", newWikiBtn: "+ 새 해설 작성", archiveEmpty: "아카이브된 해설이 없습니다.", editorTitle: "새 문화적 해설 작성", keywordLabel: "검색 키워드 (자막 내 단어와 정확히 일치)", categoryLabel: "카테고리", catEmotion: "정서 (Emotion)", catCustom: "사회적 관습 (Custom)", catHistory: "역사적 배경 (History)", titleLabel: "문서 제목", descLabel: "상세 해설 콘텐츠", cancelBtn: "취소", saveBtn: "저장 및 연동하기", apiAnalyzing: "API 분석 중...", apiSyncing: "실시간 동기화 중", apiError: "통신 실패", noSubtitle: "현재 재생 구간의 자막이 없습니다." },
-        en: { urlPlaceholder: "Enter YouTube URL", loadVideo: "Load Video & STT", archiveBtn: "Archive", loginBtn: "Sign in", logoutBtn: "Sign out", syncTitle: "Real-time STT Sync", statusWait: "Waiting", syncPlaceholder: "Load a video to start STT analysis.", contextTitle: "Cultural Context & Explanation", contextPlaceholder: "Click a highlighted word to see the explanation.", archiveTitle: "Cultural Wiki Archive", newWikiBtn: "+ New Context", archiveEmpty: "Archive is empty.", editorTitle: "Create New Context", keywordLabel: "Target Keyword (Exact match)", categoryLabel: "Category", catEmotion: "Emotion", catCustom: "Social Custom", catHistory: "History", titleLabel: "Document Title", descLabel: "Detailed Explanation", cancelBtn: "Cancel", saveBtn: "Save & Link", apiAnalyzing: "API Analyzing...", apiSyncing: "Real-time Syncing", apiError: "Connection Failed", noSubtitle: "No subtitle available for this section." }
+        ko: { urlPlaceholder: "유튜브 영상 주소를 입력하세요", loadVideo: "영상", archiveBtn: "해설 아카이브", loginBtn: "Google 로그인", logoutBtn: "로그아웃", syncTitle: "실시간 자막 동기화", statusWait: "대기 중", syncPlaceholder: "영상을 로드하면 STT 데이터 분석이 시작됩니다.", contextTitle: "문화적 맥락 및 심층 해설", contextPlaceholder: "자막의 강조된 단어를 클릭하여 해설을 확인하세요.", archiveTitle: "문화적 맥락 위키 아카이브", newWikiBtn: "+ 새 아카이브 작성", archiveEmpty: "아카이브된 해설이 없습니다.", editorTitle: "새 문화적 해설 작성", keywordLabel: "검색 키워드", categoryLabel: "카테고리", catEmotion: "정서 (Emotion)", catCustom: "관습 (Custom)", catHistory: "역사 (History)", titleLabel: "문서 제목", descLabel: "상세 해설", cancelBtn: "취소", saveBtn: "저장", apiAnalyzing: "API 분석 중...", apiSyncing: "실시간 동기화 중", apiError: "통신 실패", noSubtitle: "현재 재생 구간의 자막이 없습니다." },
+        en: { urlPlaceholder: "Enter YouTube URL", loadVideo: "Load Video & STT", archiveBtn: "Archive", loginBtn: "Sign in", logoutBtn: "Sign out", syncTitle: "Real-time STT Sync", statusWait: "Waiting", syncPlaceholder: "Load a video to start STT analysis.", contextTitle: "Cultural Context & Explanation", contextPlaceholder: "Click a highlighted word to see the explanation.", archiveTitle: "Cultural Wiki Archive", newWikiBtn: "+ New Archive", archiveEmpty: "Archive is empty.", editorTitle: "Create New Context", keywordLabel: "Target Keyword", categoryLabel: "Category", catEmotion: "Emotion", catCustom: "Social Custom", catHistory: "History", titleLabel: "Document Title", descLabel: "Detailed Explanation", cancelBtn: "Cancel", saveBtn: "Save", apiAnalyzing: "API Analyzing...", apiSyncing: "Real-time Syncing", apiError: "Connection Failed", noSubtitle: "No subtitle available for this section." }
     };
 
     const provider = new GoogleAuthProvider();
