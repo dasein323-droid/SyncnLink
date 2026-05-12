@@ -1,42 +1,55 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from youtube_transcript_api import YouTubeTranscriptApi
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
-import re
 import yt_dlp
 import google.generativeai as genai
 import tempfile
 import json
 import traceback
 
-# Firebase 초기화
+# Firebase 초기화 (환경변수 누락 시 에러 방지)
 if not firebase_admin._apps:
-    cred_json = {
-        "type": "service_account",
-        "project_id": os.getenv("FIREBASE_PROJECT_ID"),
-        "private_key": os.getenv("FIREBASE_PRIVATE_KEY", "").replace('\\n', '\n'),
-        "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
-        "token_uri": "https://oauth2.googleapis.com/token",
-    }
-    cred = credentials.Certificate(cred_json)
-    firebase_admin.initialize_app(cred)
+    try:
+        cred_json = {
+            "type": "service_account",
+            "project_id": os.getenv("FIREBASE_PROJECT_ID"),
+            "private_key": os.getenv("FIREBASE_PRIVATE_KEY", "").replace('\\n', '\n'),
+            "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+        cred = credentials.Certificate(cred_json)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+    except Exception as e:
+        print("Firebase Init Error:", e)
+        db = None
 
-db = firestore.client()
 app = FastAPI()
 
+# CORS 설정 추가 (통신 오류 방지)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 class STTRequest(BaseModel):
-    url: str
+    videoId: str  # url 대신 videoId를 직접 받음
     lang: str
 
 @app.post("/api/stt")
 async def process_stt(request: STTRequest):
-    video_id_match = re.search(r"(?:v=|youtu\.be\/)([^&]+)", request.url)
-    if not video_id_match:
-        raise HTTPException(status_code=400, detail="유효하지 않은 유튜브 URL입니다.")
+    video_id = request.videoId
     
-    video_id = video_id_match.group(1)
+    if not db:
+        raise HTTPException(status_code=500, detail="Firebase DB가 초기화되지 않았습니다.")
+
     cache_ref = db.collection("video_stt_cache").document(f"{video_id}_{request.lang}")
     cache_doc = cache_ref.get()
     
@@ -67,28 +80,22 @@ async def process_stt(request: STTRequest):
             raise HTTPException(status_code=400, detail="서버에 Gemini API Key가 설정되지 않았습니다.")
             
         try:
-            # 들여쓰기 완벽하게 수정됨
             temp_dir = tempfile.gettempdir()
             audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
+            youtube_url = f"https://www.youtube.com/watch?v={video_id}"
             
-            # 🚨 수정된 부분: 유튜브 봇 차단 우회 옵션 추가
             ydl_opts = {
                 'format': 'm4a/bestaudio',
                 'outtmpl': audio_path,
                 'noplaylist': True,
-                # 안드로이드 모바일 클라이언트로 위장하여 봇 차단 회피
                 'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-                # 일반 크롬 브라우저로 위장
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-us,en;q=0.5',
-                    'Sec-Fetch-Mode': 'navigate',
                 }
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([request.url])
+                ydl.download([youtube_url])
                 
             genai.configure(api_key=gemini_key)
             model = genai.GenerativeModel('models/gemini-1.5-flash')
@@ -115,7 +122,6 @@ async def process_stt(request: STTRequest):
                 
             formatted_data = json.loads(result_text)
             
-            # 임시 파일 삭제
             if os.path.exists(audio_path):
                 os.remove(audio_path)
             genai.delete_file(audio_file.name)
@@ -123,13 +129,17 @@ async def process_stt(request: STTRequest):
         except Exception as gemini_err:
             error_msg = traceback.format_exc()
             print("🚨 Gemini STT 처리 최종 실패:\n", error_msg)
-            raise HTTPException(status_code=500, detail="영상이 너무 길거나 자막을 생성할 수 없습니다.")
+            # Vercel 타임아웃(10초)에 걸릴 확률이 높으므로 명확한 에러 반환
+            raise HTTPException(status_code=500, detail="자막 추출 실패 (영상이 너무 길거나 Vercel 타임아웃 발생)")
 
     # 3. 데이터베이스(Firestore) 저장
-    cache_ref.set({
-        "sttData": formatted_data,
-        "language": request.lang,
-        "processedAt": firestore.SERVER_TIMESTAMP
-    })
+    try:
+        cache_ref.set({
+            "sttData": formatted_data,
+            "language": request.lang,
+            "processedAt": firestore.SERVER_TIMESTAMP
+        })
+    except Exception as e:
+        print("Firestore Cache Save Error:", e)
 
     return {"status": "success", "data": formatted_data}
