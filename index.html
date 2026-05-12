@@ -263,33 +263,64 @@
 
 <script>
     let player;
+    let isPlayerReady = false;
     let syncInterval;
+
+    // 유튜브 Video ID 추출 함수 (강화된 정규식)
+    function extractVideoID(url) {
+        const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+        return match ? match[1] : null;
+    }
 
     function onYouTubeIframeAPIReady() {
         player = new YT.Player('player', {
-            height: '100%', width: '100%', videoId: '',
+            height: '100%', 
+            width: '100%', 
+            videoId: '', // 초기에는 비워둠
             playerVars: { 'playsinline': 1, 'controls': 1, 'origin': window.location.origin },
-            events: { 'onStateChange': onPlayerStateChange }
+            events: { 
+                'onReady': onPlayerReady,
+                'onStateChange': onPlayerStateChange 
+            }
         });
+    }
+
+    function onPlayerReady(event) {
+        isPlayerReady = true;
     }
 
     async function requestSTTAnalysis() {
         const url = document.getElementById('youtube-url').value;
-        const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([^#&?]*)/);
-        if (!idMatch || !idMatch[1]) return alert(window.currentLang === 'ko' ? "유효한 유튜브 영상 링크를 입력해주세요." : "Invalid YouTube URL.");
+        const videoId = extractVideoID(url);
+        
+        if (!videoId) {
+            return alert(window.currentLang === 'ko' ? "유효한 유튜브 영상 링크를 입력해주세요." : "Invalid YouTube URL.");
+        }
 
-        player.loadVideoById(idMatch[1]);
+        // 플레이어가 준비되었을 때만 영상 로드
+        if (isPlayerReady) {
+            player.loadVideoById(videoId);
+        } else {
+            alert(window.currentLang === 'ko' ? "플레이어 초기화 중입니다. 잠시 후 다시 시도해주세요." : "Player initializing. Please try again.");
+            return;
+        }
+
         const statusBadge = document.getElementById('stt-status');
         statusBadge.className = 'status-badge status-loading';
         statusBadge.innerText = window.i18nData[window.currentLang].apiAnalyzing;
 
         try {
+            // url 대신 videoId를 직접 전송
             const response = await fetch('/api/stt', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: url, lang: window.currentLang })
+                body: JSON.stringify({ videoId: videoId, lang: window.currentLang })
             });
-            if (!response.ok) throw new Error("서버 응답 오류");
+            
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.detail || "서버 응답 오류");
+            }
             
             const result = await response.json();
             window.currentSTTData = result.data;
@@ -297,15 +328,18 @@
             statusBadge.innerText = window.i18nData[window.currentLang].apiSyncing;
             updateSync();
         } catch (error) {
-            console.error(error);
+            console.error("STT Error:", error);
             statusBadge.className = 'status-badge status-error';
-            statusBadge.innerText = window.i18nData[window.currentLang].apiError;
+            statusBadge.innerText = window.i18nData[window.currentLang].apiError + " (" + error.message + ")";
         }
     }
 
     function onPlayerStateChange(event) {
-        if (event.data == YT.PlayerState.PLAYING) syncInterval = setInterval(updateSync, 100); 
-        else clearInterval(syncInterval); 
+        if (event.data == YT.PlayerState.PLAYING) {
+            syncInterval = setInterval(updateSync, 100); 
+        } else {
+            clearInterval(syncInterval); 
+        }
     }
 
     function updateSync() {
