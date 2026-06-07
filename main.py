@@ -105,12 +105,11 @@ async def process_stt(request: STTRequest):
 
         # [STEP 2] Gemini STT로 번역 및 타임라인 추출
         print(f"🎬 오디오 확보 성공. Gemini STT 분석을 시작합니다.")
-        gemini_key = os.getenv("GEMINI_API_KEY")
+        gemini_key = os.getenv("GEMINI_API_KEY") # Render 환경변수에 등록되어 있어야 함
         genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel('models/gemini-1.5-flash')
         
-        # 파일 업로드
-        audio_file = genai.upload_file(path=audio_path)
+        # 최신 모델 이름 확인
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""
         Listen to this audio. Regardless of the original language, translate and summarize the content into natural {request.lang} (Korean).
@@ -123,7 +122,22 @@ async def process_stt(request: STTRequest):
         ]
         """
         
-        gemini_response = model.generate_content([prompt, audio_file])
+        print("Gemini API로 오디오 전송 중...")
+        
+        # 파일을 바이너리(바이트) 형태로 직접 읽어서 전송 (upload_file 오류 원천 차단)
+        with open(audio_path, "rb") as f:
+            audio_bytes = f.read()
+            
+        gemini_response = model.generate_content([
+            prompt,
+            {
+                "mime_type": "audio/mp3",
+                "data": audio_bytes
+            }
+        ])
+        
+        result_text = gemini_response.text.strip()
+        print("Gemini 응답 완료. JSON 변환 시도...")
         result_text = gemini_response.text.strip()
         
         if result_text.startswith("```json"):
