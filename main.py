@@ -4,12 +4,12 @@ from pydantic import BaseModel
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
-import yt_dlp
 import google.generativeai as genai
 import tempfile
 import json
 import traceback
 import urllib.request
+import requests
 
 # Firebase 초기화
 if not firebase_admin._apps:
@@ -45,6 +45,14 @@ class STTRequest(BaseModel):
     videoId: str
     lang: str
 
+import requests
+import tempfile
+import os
+import json
+import google.generativeai as genai
+
+# ... (FastAPI 및 Firebase 초기화 코드는 동일) ...
+
 @app.post("/api/stt")
 async def process_stt(request: STTRequest):
     video_id = request.videoId
@@ -58,133 +66,86 @@ async def process_stt(request: STTRequest):
     if cache_doc.exists:
         return {"status": "success", "data": cache_doc.to_dict().get("sttData")}
 
-    cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
-    has_cookie = os.path.exists(cookie_path)
+    temp_dir = tempfile.gettempdir()
+    audio_path = os.path.join(temp_dir, f"{video_id}.mp3")
     formatted_data = None
 
-    # [STEP 1] yt-dlp를 이용한 자막 직접 추출 (IP 차단 우회)
     try:
-        print(f"🔍 yt-dlp로 자막 추출 시도: {video_id}")
-        ydl_opts = {
-            'skip_download': True,
-            'writesubtitles': True,
-            'writeautomaticsub': True,
-            'subtitleslangs': [request.lang],
-            'quiet': True
-            # extractor_args 블록 전체 삭제
+        # [STEP 1] 외부 API를 활용한 오디오 다운로드 (yt-dlp 대체)
+        print(f"🔄 외부 API를 통해 오디오 확보 시작: {video_id}")
+        
+        # 주의: 아래 API 엔드포인트와 헤더는 RapidAPI에서 선택한 서비스에 맞게 변경해야 합니다.
+        # 예시: 'Youtube MP3 Downloader' API 사용 가정
+        rapid_api_url = "https://youtube-mp36.p.rapidapi.com/dl"
+        querystring = {"id": video_id}
+        headers = {
+            "x-rapidapi-key": os.getenv("4966da32e6msh7182c742dac2424p10afb7jsn0d01b22c96ff"), # 환경변수에 키 추가 필요
+            "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
         }
-        if has_cookie:
-            ydl_opts['cookiefile'] = cookie_path
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+        response = requests.get(rapid_api_url, headers=headers, params=querystring)
+        response_data = response.json()
 
-        subs = info.get('subtitles', {})
-        auto_subs = info.get('automatic_captions', {})
+        if response.status_code != 200 or "link" not in response_data:
+            raise Exception("외부 API에서 오디오 링크를 가져오지 못했습니다.")
 
-        # 요청한 언어의 자막 찾기
-        target_sub_list = subs.get(request.lang) or auto_subs.get(request.lang)
+        # 오디오 파일 다운로드 및 서버 임시 저장
+        audio_url = response_data["link"]
+        audio_data = requests.get(audio_url).content
+        with open(audio_path, 'wb') as f:
+            f.write(audio_data)
 
-        if target_sub_list:
-            # json3 포맷의 자막 URL 추출
-            json3_url = next((sub['url'] for sub in target_sub_list if sub['ext'] == 'json3'), None)
-
-            if json3_url:
-                # 자막 데이터 다운로드 및 파싱
-                req = urllib.request.Request(json3_url)
-                with urllib.request.urlopen(req) as response:
-                    sub_data = json.loads(response.read().decode())
-
-                formatted_data = []
-                for event in sub_data.get('events', []):
-                    if 'segs' in event and 'tStartMs' in event:
-                        start = event['tStartMs'] / 1000.0
-                        duration = event.get('dDurationMs', 0) / 1000.0
-                        text = "".join([seg.get('utf8', '') for seg in event['segs']])
-                        if text.strip() and text.strip() != '\n':
-                            formatted_data.append({
-                                "start": start,
-                                "end": start + duration,
-                                "original": text.strip()
-                            })
-        
-        if not formatted_data:
-            raise Exception("해당 언어의 자막이 존재하지 않습니다.")
-
-    except Exception as e:
-        print(f"⚠️ yt-dlp 자막 추출 실패: {e}")
-        formatted_data = None
-
-    # [STEP 2] 자막 추출 실패 시 Gemini STT로 오디오 분석 (Fallback)
-    if not formatted_data:
-        print(f"🎬 자막 없음 감지됨. Gemini STT로 분석을 시작합니다. (비디오: {video_id})")
-        
+        # [STEP 2] Gemini STT로 번역 및 타임라인 추출
+        print(f"🎬 오디오 확보 성공. Gemini STT 분석을 시작합니다.")
         gemini_key = os.getenv("GEMINI_API_KEY")
-        if not gemini_key:
-            raise HTTPException(status_code=400, detail="서버에 Gemini API Key가 설정되지 않았습니다.")
+        genai.configure(api_key=gemini_key)
+        model = genai.GenerativeModel('models/gemini-1.5-flash')
+        
+        # 파일 업로드
+        audio_file = genai.upload_file(path=audio_path)
+        
+        prompt = f"""
+        Listen to this audio. Regardless of the original language, translate and summarize the content into natural {request.lang} (Korean).
+        Split the translated transcription into short, readable sentences. 
+        Estimate the 'start' and 'end' time (in seconds) for each sentence matching the audio timeline.
+        Return ONLY a valid JSON array format like this, nothing else:
+        [
+          {{"start": 0.0, "end": 2.5, "original": "안녕하세요, 오늘 살펴볼 주제는..."}},
+          {{"start": 2.5, "end": 5.0, "original": "바로 이것입니다."}}
+        ]
+        """
+        
+        gemini_response = model.generate_content([prompt, audio_file])
+        result_text = gemini_response.text.strip()
+        
+        if result_text.startswith("```json"):
+            result_text = result_text[7:-3]
+        elif result_text.startswith("```"):
+            result_text = result_text[3:-3]
             
-        try:
-            temp_dir = tempfile.gettempdir()
-            audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
-            youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-            
-            ydl_opts_audio = {
-                'format': 'm4a/bestaudio/best',
-                'outtmpl': audio_path,
-                'noplaylist': True,
-                'quiet': True,
-            }
-            if has_cookie:
-                ydl_opts_audio['cookiefile'] = cookie_path
-            
-            with yt_dlp.YoutubeDL(ydl_opts_audio) as ydl:
-                ydl.download([youtube_url])
-                
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel('models/gemini-1.5-flash')
-            audio_file = genai.upload_file(path=audio_path)
-            
-            # 오디오의 원본 언어와 상관없이 항상 자연스러운 요청 언어(한국어)로 번역하도록 프롬프트 강화
-            prompt = f"""
-            Listen to this audio. Regardless of the original language spoken in the audio, you MUST translate and summarize the content directly into natural {request.lang} (Korean) language.
-            Split the translated transcription into short, readable sentences. 
-            Estimate the 'start' and 'end' time (in seconds) for each sentence matching the audio timeline.
-            Return ONLY a valid JSON array format like this, nothing else:
-            [
-              {{"start": 0.0, "end": 2.5, "original": "안녕하세요, 오늘 살펴볼 주제는..."}},
-              {{"start": 2.5, "end": 5.0, "original": "바로 이것입니다."}}
-            ]
-            """
-            
-            
-            response = model.generate_content([prompt, audio_file])
-            result_text = response.text.strip()
-            
-            if result_text.startswith("```json"):
-                result_text = result_text[7:-3]
-            elif result_text.startswith("```"):
-                result_text = result_text[3:-3]
-                
-            formatted_data = json.loads(result_text)
-            
-            if os.path.exists(audio_path):
-                os.remove(audio_path)
-            genai.delete_file(audio_file.name)
+        formatted_data = json.loads(result_text)
+        
+        # 처리 완료 후 파일 삭제
+        genai.delete_file(audio_file.name)
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
 
-        except Exception as gemini_err:
-            error_msg = traceback.format_exc()
-            print("🚨 Gemini STT 처리 최종 실패:\n", error_msg)
-            raise HTTPException(status_code=500, detail="자막 추출 및 STT 분석에 모두 실패했습니다. (유튜브 봇 차단)")
-
-    # 정상 추출된 경우 Firestore에 캐싱
-    try:
-        cache_ref.set({
-            "sttData": formatted_data,
-            "language": request.lang,
-            "processedAt": firestore.SERVER_TIMESTAMP
-        })
     except Exception as e:
-        print("Firestore Cache Save Error:", e)
+        print("🚨 분석 최종 실패:\n", str(e))
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+        raise HTTPException(status_code=500, detail=f"오디오 확보 또는 분석에 실패했습니다: {str(e)}")
+
+    # [STEP 3] 정상 추출된 경우 Firestore에 캐싱
+    if formatted_data:
+        try:
+            cache_ref.set({
+                "sttData": formatted_data,
+                "language": request.lang,
+                "processedAt": firestore.SERVER_TIMESTAMP
+            })
+        except Exception as e:
+            print("Firestore Cache Save Error:", e)
 
     return {"status": "success", "data": formatted_data}
 
