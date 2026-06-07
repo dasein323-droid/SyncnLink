@@ -64,7 +64,7 @@ async def process_stt(request: STTRequest):
     formatted_data = None
 
     try:
-        print(f"[STEP 1] Downloading audio: {video_id}")
+        print(f"[STEP 1] Downloading audio via RapidAPI: {video_id}")
 
         rapid_api_url = "https://youtube-mp36.p.rapidapi.com/dl"
         querystring = {"id": video_id} 
@@ -74,7 +74,7 @@ async def process_stt(request: STTRequest):
             "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
         }
 
-        # 1. API 폴링 (대기열 처리) 로직
+        # API 대기열(Polling) 로직 복구
         max_retries = 10
         audio_url = ""
 
@@ -110,15 +110,19 @@ async def process_stt(request: STTRequest):
             audio_bytes = audio_file.read()
 
         lang_name = "Korean" if request.lang == "ko" else "English"
+        
+        # 강력한 광고 무시 및 환각 억제 프롬프트 적용
         prompt = (
             f"Listen to the attached audio. If the audio is in another language, TRANSLATE the meaning to {lang_name}. "
             f"If it is already in {lang_name}, TRANSCRIBE it. "
-            f"CRITICAL: Base your output STRICTLY on the actual audio content. Do NOT hallucinate, guess, or create dummy/sample text (like '유라 씨...'). "
-            f"If the audio contains no speech or is just music, return an empty array []. "
-            f"Return strictly as a valid JSON array: [{{ \"start\": 0.0, \"end\": 1.5, \"text\": \"actual speech\" }}]"
+            f"CRITICAL INSTRUCTIONS: "
+            f"1. The audio might begin with a random YouTube pre-roll advertisement (e.g., fitness, product ads). IGNORE ALL ADVERTISEMENTS completely. "
+            f"2. ONLY transcribe/translate the main content (e.g., movie scenes, music, actual content). "
+            f"3. Base your output STRICTLY on the actual audio. Do NOT hallucinate, guess, or create dummy text (like '유라 씨...'). "
+            f"4. If the audio is 100% advertisement or contains no main speech, return an empty array []. "
+            f"Return strictly as a valid JSON array: [{{\"start\": 0.0, \"end\": 1.5, \"text\": \"actual speech\"}}]"
         )
 
-        # 2. 최신 모델 순차 호출 (Fallback) 로직
         models_to_try = [
             "gemini-3.5-flash",
             "gemini-2.5-flash",
@@ -152,7 +156,7 @@ async def process_stt(request: STTRequest):
 
         result_text = response.text.strip()
 
-        # 3. 정규표현식을 활용한 안전한 JSON 추출 로직
+        # 정규표현식을 활용한 안전한 JSON 추출
         json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
         
         if json_match:
