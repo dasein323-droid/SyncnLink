@@ -8,7 +8,6 @@ import google.generativeai as genai
 import tempfile
 import json
 import traceback
-import urllib.request
 import requests
 
 # Firebase 초기화
@@ -51,7 +50,7 @@ async def process_stt(request: STTRequest):
     video_id = request.videoId
 
     if not db:
-        raise HTTPException(status_code=500, detail="Firebase DB가 초기화되지 않았습니다.")
+        raise HTTPException(status_code=500, detail="Firebase DB initialization failed")
 
     cache_ref = db.collection("video_stt_cache").document(f"{video_id}_{request.lang}")
     cache_doc = cache_ref.get()
@@ -62,68 +61,62 @@ async def process_stt(request: STTRequest):
     temp_dir = tempfile.gettempdir()
     audio_path = os.path.join(temp_dir, f"{video_id}.mp3")
     formatted_data = None
-    audio_file = None  # 파일 업로드 객체 추적용
+    audio_file = None
 
     try:
-        # [STEP 1] 외부 API를 활용한 오디오 다운로드 (yt-dlp 대체)
-        print(f"🔄 외부 API를 통해 오디오 확보 시작: {video_id}")
+        print(f"[STEP 1] Downloading audio from YouTube API: {video_id}")
 
         rapid_api_url = "https://youtube-mp36.p.rapidapi.com/dl"
         querystring = {"id": video_id} 
 
         headers = {
-            "x-rapidapi-key": os.getenv("RAPIDAPI_KEY", ""),
+            "x-rapidapi-key": "4966da32e6msh7182c742dac2424p10afb7jsn0d01b22c96ff",
             "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
         }
 
-        print("API 요청 중...")
+        print("Sending API request...")
         response = requests.get(rapid_api_url, headers=headers, params=querystring)
         response_data = response.json()
 
-        print("API 응답 데이터:", response_data) 
+        print("API response received")
 
         audio_url = response_data.get("link", "")
 
         if response.status_code != 200 or not audio_url.startswith("http"):
-            error_msg = response_data.get("msg") or response_data.get("message") or "API가 유효한 다운로드 링크를 제공하지 않았습니다."
-            print("🚨 API 에러 전체 응답:", response_data)
-            raise Exception(f"외부 API 실패: {error_msg}")
+            error_msg = response_data.get("msg") or response_data.get("message") or "API failed to provide download link"
+            print("API error:", response_data)
+            raise Exception(f"YouTube API failed: {error_msg}")
 
-        print("오디오 다운로드 링크 확보 성공, 다운로드 중...")
+        print("Downloading audio file...")
 
         audio_data = requests.get(audio_url).content
         with open(audio_path, 'wb') as f:
             f.write(audio_data)
 
-        print("오디오 파일 임시 저장 완료.")
+        print("Audio file saved successfully")
 
-        # [STEP 2] Gemini STT로 번역 및 타임라인 추출
-        print(f"🎬 오디오 확보 성공. Gemini STT 분석을 시작합니다.")
+        print("[STEP 2] Starting Gemini STT analysis")
         gemini_key = os.getenv("GEMINI_API_KEY")
         genai.configure(api_key=gemini_key)
 
         target_model = 'gemini-2.0-flash'
-        print(f"🚀 최종 선택된 모델: {target_model}")
+        print(f"Using model: {target_model}")
 
         model = genai.GenerativeModel(target_model)
 
-        prompt = f"""
-        Listen to this audio. Regardless of the original language, translate and summarize the content into natural {request.lang} (Korean).
-        Split the translated transcription into short, readable sentences. 
-        Estimate the 'start' and 'end' time (in seconds) for each sentence matching the audio timeline.
-        Return ONLY a valid JSON array format like this, nothing else:
-        [
-          {{"start": 0.0, "end": 2.5, "original": "안녕하세요, 오늘 살펴볼 주제는..."}},
-          {{"start": 2.5, "end": 5.0, "original": "바로 이것입니다."}}
-        ]
-        """
+        prompt = f"""Listen to this audio. Regardless of the original language, translate and summarize the content into natural {request.lang}.
+Split the translated transcription into short, readable sentences. 
+Estimate the 'start' and 'end' time (in seconds) for each sentence matching the audio timeline.
+Return ONLY a valid JSON array format like this, nothing else:
+[
+  {{"start": 0.0, "end": 2.5, "original": "Sample text"}},
+  {{"start": 2.5, "end": 5.0, "original": "More sample text"}}
+]"""
 
-        print("Gemini API로 오디오 전송 중...")
+        print("Uploading audio to Gemini API...")
 
-        # 방식 1: 파일 업로드 (권장 - 용량 제한 없음)
-        print("✅ 파일 업로드 방식 사용")
         audio_file = genai.upload_file(audio_path, mime_type="audio/mpeg")
-        print(f"파일 업로드 완료: {audio_file.name}")
+        print(f"File uploaded: {audio_file.name}")
 
         gemini_response = model.generate_content([
             prompt,
@@ -131,7 +124,7 @@ async def process_stt(request: STTRequest):
         ])
 
         result_text = gemini_response.text.strip()
-        print("Gemini 응답 완료. JSON 변환 시도...")
+        print("Gemini response received. Converting to JSON...")
 
         if result_text.startswith("```json"):
             result_text = result_text[7:-3]
@@ -139,33 +132,31 @@ async def process_stt(request: STTRequest):
             result_text = result_text[3:-3]
 
         formatted_data = json.loads(result_text)
+        print("JSON conversion successful")
 
     except Exception as e:
-        print("🚨 분석 최종 실패:
-", str(e))
+        print("Analysis failed:")
+        print(str(e))
         print(traceback.format_exc())
 
     finally:
-        # 안전한 정리: 조건부로 파일 삭제
         if audio_file is not None:
             try:
                 genai.delete_file(audio_file.name)
-                print(f"✅ Gemini 임시 파일 삭제 완료: {audio_file.name}")
+                print(f"Gemini file deleted: {audio_file.name}")
             except Exception as e:
-                print(f"⚠️ Gemini 파일 삭제 실패: {e}")
+                print(f"Warning - could not delete Gemini file: {e}")
 
         if os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
-                print(f"✅ 로컬 임시 파일 삭제 완료: {audio_path}")
+                print(f"Local file deleted: {audio_path}")
             except Exception as e:
-                print(f"⚠️ 로컬 파일 삭제 실패: {e}")
+                print(f"Warning - could not delete local file: {e}")
 
-        # 에러 발생 시 HTTP 응답
         if formatted_data is None:
-            raise HTTPException(status_code=500, detail="오디오 분석에 실패했습니다.")
+            raise HTTPException(status_code=500, detail="Audio analysis failed")
 
-    # [STEP 3] 정상 추출된 경우 Firestore에 캐싱
     if formatted_data:
         try:
             cache_ref.set({
@@ -173,9 +164,9 @@ async def process_stt(request: STTRequest):
                 "language": request.lang,
                 "processedAt": firestore.SERVER_TIMESTAMP
             })
-            print("✅ Firestore 캐싱 완료")
+            print("Firestore cache saved")
         except Exception as e:
-            print("Firestore Cache Save Error:", e)
+            print("Firestore cache error:", e)
 
     return {"status": "success", "data": formatted_data}
 
@@ -183,4 +174,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
