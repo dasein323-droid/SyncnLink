@@ -73,7 +73,7 @@ async def process_stt(request: STTRequest):
 
 # main.py 파일 내의 [STEP 2] Gemini STT 전환 부분 수정
 
-    # [STEP 2] 유튜브 자막이 아예 없는 경우 -> Gemini로 전환
+   # [STEP 2] 유튜브 자막이 아예 없는 경우 -> Gemini로 전환
     except Exception as e:
         print(f"🎬 자막 없음 감지됨. Gemini STT로 분석을 시작합니다. (비디오: {video_id})")
         
@@ -93,22 +93,21 @@ async def process_stt(request: STTRequest):
                 'quiet': True,
                 'extractor_args': {
                     'youtube': {
-                        # iOS 클라이언트로 위장하여 우회 확률 극대화
-                        'player_client': ['ios', 'android', 'tv'],
+                        # 데이터센터 IP 차단 우회에 가장 강력한 TV 클라이언트 사용
+                        'player_client': ['tv', 'web'],
                         'player_skip': ['webpage', 'configs']
                     }
-                },
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
                 }
+                # 🚨 주의: User-Agent 설정은 쿠키와 충돌하므로 완전히 삭제했습니다.
             }
             
-            # 🚨 핵심: 쿠키 파일이 존재하면 적용하여 봇 차단 완벽 우회
+            # 🚨 쿠키 파일 적용 및 확인 로직
             cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
             if os.path.exists(cookie_path):
                 ydl_opts['cookiefile'] = cookie_path
+                print("✅ [성공] cookies.txt 파일을 찾았습니다. 쿠키를 적용하여 다운로드합니다.")
             else:
-                print("⚠️ cookies.txt 파일이 없습니다. 유튜브 봇 차단이 발생할 수 있습니다.")
+                print("❌ [경고] cookies.txt 파일이 서버에 없습니다! 봇 차단 에러가 발생할 수 있습니다.")
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([youtube_url])
