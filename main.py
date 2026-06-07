@@ -76,7 +76,7 @@ async def process_stt(request: STTRequest):
         querystring = {"id": video_id} 
         
         headers = {
-            "x-rapidapi-key": os.getenv("4966da32e6msh7182c742dac2424p10afb7jsn0d01b22c96ff"), # Render 환경변수에 등록된 키
+            "x-rapidapi-key": "4966da32e6msh7182c742dac2424p10afb7jsn0d01b22c96ff", 
             "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
         }
 
