@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
-import google.generativeai as genai
+from google import genai
 import tempfile
 import json
 import traceback
@@ -61,7 +61,6 @@ async def process_stt(request: STTRequest):
     temp_dir = tempfile.gettempdir()
     audio_path = os.path.join(temp_dir, f"{video_id}.mp3")
     formatted_data = None
-    audio_file = None
 
     try:
         print(f"[STEP 1] Downloading audio from YouTube API: {video_id}")
@@ -70,7 +69,7 @@ async def process_stt(request: STTRequest):
         querystring = {"id": video_id} 
 
         headers = {
-            "x-rapidapi-key": "4966da32e6msh7182c742dac2424p10afb7jsn0d01b22c96ff",
+            "x-rapidapi-key": os.getenv("RAPIDAPI_KEY", ""),
             "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
         }
 
@@ -97,12 +96,14 @@ async def process_stt(request: STTRequest):
 
         print("[STEP 2] Starting Gemini STT analysis")
         gemini_key = os.getenv("GEMINI_API_KEY")
-        genai.configure(api_key=gemini_key)
 
-        target_model = 'gemini-2.0-flash'
-        print(f"Using model: {target_model}")
+        # NEW SDK: google.genai
+        client = genai.Client(api_key=gemini_key)
 
-        model = genai.GenerativeModel(target_model)
+        print("Uploading audio to Gemini API...")
+
+        with open(audio_path, "rb") as audio_file:
+            audio_bytes = audio_file.read()
 
         prompt = f"""Listen to this audio. Regardless of the original language, translate and summarize the content into natural {request.lang}.
 Split the translated transcription into short, readable sentences. 
@@ -113,17 +114,20 @@ Return ONLY a valid JSON array format like this, nothing else:
   {{"start": 2.5, "end": 5.0, "original": "More sample text"}}
 ]"""
 
-        print("Uploading audio to Gemini API...")
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[
+                prompt,
+                genai.types.Part(
+                    inline_data=genai.types.Blob(
+                        mime_type="audio/mpeg",
+                        data=audio_bytes
+                    )
+                )
+            ]
+        )
 
-        audio_file = genai.upload_file(audio_path, mime_type="audio/mpeg")
-        print(f"File uploaded: {audio_file.name}")
-
-        gemini_response = model.generate_content([
-            prompt,
-            audio_file
-        ])
-
-        result_text = gemini_response.text.strip()
+        result_text = response.text.strip()
         print("Gemini response received. Converting to JSON...")
 
         if result_text.startswith("```json"):
@@ -140,13 +144,6 @@ Return ONLY a valid JSON array format like this, nothing else:
         print(traceback.format_exc())
 
     finally:
-        if audio_file is not None:
-            try:
-                genai.delete_file(audio_file.name)
-                print(f"Gemini file deleted: {audio_file.name}")
-            except Exception as e:
-                print(f"Warning - could not delete Gemini file: {e}")
-
         if os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
