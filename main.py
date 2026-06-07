@@ -9,13 +9,12 @@ import tempfile
 import json
 import traceback
 import requests
+import time
 
-# Firebase 초기화
 if not firebase_admin._apps:
     try:
         raw_private_key = os.getenv("FIREBASE_PRIVATE_KEY", "")
         clean_private_key = raw_private_key.strip('"').replace('\\n', '\n')
-
         cred_json = {
             "type": "service_account",
             "project_id": os.getenv("FIREBASE_PROJECT_ID"),
@@ -44,6 +43,7 @@ class STTRequest(BaseModel):
     videoId: str
     lang: str
 
+RATE_LIMIT_DELAY = 65
 
 @app.post("/api/stt")
 async def process_stt(request: STTRequest):
@@ -63,7 +63,7 @@ async def process_stt(request: STTRequest):
     formatted_data = None
 
     try:
-        print(f"[STEP 1] Downloading audio from YouTube API: {video_id}")
+        print(f"[STEP 1] Downloading audio: {video_id}")
 
         rapid_api_url = "https://youtube-mp36.p.rapidapi.com/dl"
         querystring = {"id": video_id} 
@@ -73,49 +73,32 @@ async def process_stt(request: STTRequest):
             "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
         }
 
-        print("Sending API request...")
         response = requests.get(rapid_api_url, headers=headers, params=querystring)
         response_data = response.json()
-
-        print("API response received")
 
         audio_url = response_data.get("link", "")
 
         if response.status_code != 200 or not audio_url.startswith("http"):
-            error_msg = response_data.get("msg") or response_data.get("message") or "API failed to provide download link"
-            print("API error:", response_data)
-            raise Exception(f"YouTube API failed: {error_msg}")
+            raise Exception(f"YouTube API failed: {response_data.get('msg')}")
 
-        print("Downloading audio file...")
-
+        print("Downloading audio...")
         audio_data = requests.get(audio_url).content
         with open(audio_path, 'wb') as f:
             f.write(audio_data)
 
-        print("Audio file saved successfully")
-
-        print("[STEP 2] Starting Gemini STT analysis")
+        print("[STEP 2] Gemini analysis (gemini-1.5-flash)")
         gemini_key = os.getenv("GEMINI_API_KEY")
-
-        # NEW SDK: google.genai
         client = genai.Client(api_key=gemini_key)
-
-        print("Uploading audio to Gemini API...")
 
         with open(audio_path, "rb") as audio_file:
             audio_bytes = audio_file.read()
 
-        prompt = f"""Listen to this audio. Regardless of the original language, translate and summarize the content into natural {request.lang}.
-Split the translated transcription into short, readable sentences. 
-Estimate the 'start' and 'end' time (in seconds) for each sentence matching the audio timeline.
-Return ONLY a valid JSON array format like this, nothing else:
-[
-  {{"start": 0.0, "end": 2.5, "original": "Sample text"}},
-  {{"start": 2.5, "end": 5.0, "original": "More sample text"}}
-]"""
+        lang_name = "Korean" if request.lang == "ko" else "English"
+
+        prompt = f"Transcribe to {lang_name}. JSON: [{{start:s, end:e, text:t}}]"
 
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-1.5-flash",
             contents=[
                 prompt,
                 genai.types.Part(
@@ -128,7 +111,6 @@ Return ONLY a valid JSON array format like this, nothing else:
         )
 
         result_text = response.text.strip()
-        print("Gemini response received. Converting to JSON...")
 
         if result_text.startswith("```json"):
             result_text = result_text[7:-3]
@@ -136,20 +118,21 @@ Return ONLY a valid JSON array format like this, nothing else:
             result_text = result_text[3:-3]
 
         formatted_data = json.loads(result_text)
-        print("JSON conversion successful")
+        print("SUCCESS: JSON conversion complete")
+
+        print(f"Waiting {RATE_LIMIT_DELAY}s to avoid rate limit...")
+        time.sleep(RATE_LIMIT_DELAY)
 
     except Exception as e:
-        print("Analysis failed:")
-        print(str(e))
+        print(f"ERROR: {str(e)}")
         print(traceback.format_exc())
 
     finally:
         if os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
-                print(f"Local file deleted: {audio_path}")
-            except Exception as e:
-                print(f"Warning - could not delete local file: {e}")
+            except:
+                pass
 
         if formatted_data is None:
             raise HTTPException(status_code=500, detail="Audio analysis failed")
@@ -161,9 +144,9 @@ Return ONLY a valid JSON array format like this, nothing else:
                 "language": request.lang,
                 "processedAt": firestore.SERVER_TIMESTAMP
             })
-            print("Firestore cache saved")
+            print("Cache saved")
         except Exception as e:
-            print("Firestore cache error:", e)
+            print(f"Cache error: {e}")
 
     return {"status": "success", "data": formatted_data}
 
