@@ -262,31 +262,18 @@
 </script>
 
 <script>
-    let player;
-    let isPlayerReady = false;
+    let player = null;
     let syncInterval;
 
-    // 유튜브 Video ID 추출 함수 (강화된 정규식)
+    // 유튜브 Video ID 추출 함수
     function extractVideoID(url) {
         const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
         return match ? match[1] : null;
     }
 
+    // YouTube API 로드 완료 시 호출되는 기본 함수 (내용은 비워둠)
     function onYouTubeIframeAPIReady() {
-        player = new YT.Player('player', {
-            height: '100%', 
-            width: '100%', 
-            videoId: '', // 초기에는 비워둠
-            playerVars: { 'playsinline': 1, 'controls': 1, 'origin': window.location.origin },
-            events: { 
-                'onReady': onPlayerReady,
-                'onStateChange': onPlayerStateChange 
-            }
-        });
-    }
-
-    function onPlayerReady(event) {
-        isPlayerReady = true;
+        console.log("YouTube API Ready");
     }
 
     async function requestSTTAnalysis() {
@@ -297,12 +284,22 @@
             return alert(window.currentLang === 'ko' ? "유효한 유튜브 영상 링크를 입력해주세요." : "Invalid YouTube URL.");
         }
 
-        // 플레이어가 준비되었을 때만 영상 로드
-        if (isPlayerReady) {
-            player.loadVideoById(videoId);
+        // 💡 핵심 수정: 플레이어가 없으면 새로 생성하고, 있으면 영상만 교체
+        if (!player) {
+            player = new YT.Player('player', {
+                height: '100%', 
+                width: '100%', 
+                videoId: videoId, // 추출한 ID를 바로 넣어서 생성
+                playerVars: { 'playsinline': 1, 'controls': 1, 'origin': window.location.origin },
+                events: { 
+                    'onReady': function(event) {
+                        event.target.playVideo(); // 로드 완료 시 자동 재생
+                    },
+                    'onStateChange': onPlayerStateChange 
+                }
+            });
         } else {
-            alert(window.currentLang === 'ko' ? "플레이어 초기화 중입니다. 잠시 후 다시 시도해주세요." : "Player initializing. Please try again.");
-            return;
+            player.loadVideoById(videoId);
         }
 
         const statusBadge = document.getElementById('stt-status');
@@ -310,10 +307,8 @@
         statusBadge.innerText = window.i18nData[window.currentLang].apiAnalyzing;
 
         try {
-            // 🚨 [수정된 부분] Render 서버의 API 주소로 변경
-            // 반드시 본인이 Render에서 발급받은 주소로 변경해야 합니다!
-            // 예시: 'https://synclink-backend.onrender.com/api/stt'
-            const RENDER_API_URL = 'https://syncnlink.onrender.com/api/stt'; 
+            // 🚨 주의: 아래 주소를 본인의 Render 주소로 반드시 변경하세요!
+            const RENDER_API_URL = 'https://[본인의-Render-주소].onrender.com/api/stt'; 
 
             const response = await fetch(RENDER_API_URL, {
                 method: 'POST',
@@ -380,7 +375,6 @@
         }
     }
 
-    // [추가] 아카이브 상세 해설 토글 함수
     window.toggleWikiDesc = function(id) {
         const descEl = document.getElementById(`desc-${id}`);
         if (descEl.style.display === 'none') {
@@ -396,7 +390,6 @@
             list.innerHTML = `<p class="archive-empty">${window.i18nData[window.currentLang].archiveEmpty}</p>`; 
             return; 
         }
-        // [변경] 키워드 클릭 시 토글되도록 구조 및 스타일 수정
         list.innerHTML = window.archiveDb.map(wiki => `
             <div class="archive-item" style="display: block;">
                 <div style="display:flex; justify-content: space-between; align-items: flex-start;">
