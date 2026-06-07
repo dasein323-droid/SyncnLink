@@ -310,8 +310,12 @@
         statusBadge.innerText = window.i18nData[window.currentLang].apiAnalyzing;
 
         try {
-            // url 대신 videoId를 직접 전송
-            const response = await fetch('/api/stt', {
+            // 🚨 [수정된 부분] Render 서버의 API 주소로 변경
+            // 반드시 본인이 Render에서 발급받은 주소로 변경해야 합니다!
+            // 예시: 'https://synclink-backend.onrender.com/api/stt'
+            const RENDER_API_URL = 'https://[본인의-Render-주소].onrender.com/api/stt'; 
+
+            const response = await fetch(RENDER_API_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ videoId: videoId, lang: window.currentLang })
