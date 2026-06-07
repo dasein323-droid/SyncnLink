@@ -348,7 +348,9 @@
         const container = document.getElementById('subtitle-content');
 
         if (sub) {
-            let html = sub.original;
+            // ❌ 기존 코드: let html = sub.original;
+            let html = sub.text || sub.original || ""; // ✅ 변경: text 키를 우선적으로 찾도록 수정
+            
             window.archiveDb.forEach(wiki => {
                 if (wiki.keyword && wiki.keyword.trim() !== "") {
                     const regex = new RegExp(`(${wiki.keyword})`, "gi");
