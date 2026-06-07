@@ -56,9 +56,22 @@ async def process_stt(request: STTRequest):
     if cache_doc.exists:
         return {"status": "success", "data": cache_doc.to_dict().get("sttData")}
 
-    # [STEP 1] 유튜브 자막 1차 시도
+    # 🚨 쿠키 파일 경로 확인 및 디버깅
+    cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
+    has_cookie = os.path.exists(cookie_path)
+    
+    if has_cookie:
+        print(f"✅ [쿠키 확인] {cookie_path} 파일을 찾았습니다. (크기: {os.path.getsize(cookie_path)} bytes)")
+    else:
+        print(f"❌ [쿠키 누락] {cookie_path} 파일이 없습니다! 봇 차단 에러가 발생할 확률이 높습니다.")
+
+    # [STEP 1] 유튜브 자막 1차 시도 (여기도 쿠키 적용)
     try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        if has_cookie:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, cookies=cookie_path)
+        else:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            
         try:
             transcript = transcript_list.find_transcript([request.lang]).fetch()
         except:
@@ -71,9 +84,7 @@ async def process_stt(request: STTRequest):
 
         formatted_data = [{"start": i["start"], "end": i["start"] + i["duration"], "original": i["text"]} for i in transcript]
 
-# main.py 파일 내의 [STEP 2] Gemini STT 전환 부분 수정
-
-   # [STEP 2] 유튜브 자막이 아예 없는 경우 -> Gemini로 전환
+    # [STEP 2] 유튜브 자막이 아예 없는 경우 -> Gemini로 전환
     except Exception as e:
         print(f"🎬 자막 없음 감지됨. Gemini STT로 분석을 시작합니다. (비디오: {video_id})")
         
@@ -93,21 +104,15 @@ async def process_stt(request: STTRequest):
                 'quiet': True,
                 'extractor_args': {
                     'youtube': {
-                        # 데이터센터 IP 차단 우회에 가장 강력한 TV 클라이언트 사용
-                        'player_client': ['tv', 'web'],
+                        'player_client': ['tv', 'mweb'],
                         'player_skip': ['webpage', 'configs']
                     }
                 }
-                # 🚨 주의: User-Agent 설정은 쿠키와 충돌하므로 완전히 삭제했습니다.
             }
             
-            # 🚨 쿠키 파일 적용 및 확인 로직
-            cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
-            if os.path.exists(cookie_path):
+            # yt-dlp에 쿠키 적용
+            if has_cookie:
                 ydl_opts['cookiefile'] = cookie_path
-                print("✅ [성공] cookies.txt 파일을 찾았습니다. 쿠키를 적용하여 다운로드합니다.")
-            else:
-                print("❌ [경고] cookies.txt 파일이 서버에 없습니다! 봇 차단 에러가 발생할 수 있습니다.")
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([youtube_url])
@@ -146,7 +151,6 @@ async def process_stt(request: STTRequest):
             print("🚨 Gemini STT 처리 최종 실패:\n", error_msg)
             raise HTTPException(status_code=500, detail="자막 추출 실패 (유튜브 봇 차단 또는 타임아웃)")
 
-    # 3. 데이터베이스(Firestore) 저장
     try:
         cache_ref.set({
             "sttData": formatted_data,
