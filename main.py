@@ -155,16 +155,18 @@ async def process_stt(request: STTRequest):
             model = genai.GenerativeModel('models/gemini-1.5-flash')
             audio_file = genai.upload_file(path=audio_path)
             
+            # 오디오의 원본 언어와 상관없이 항상 자연스러운 요청 언어(한국어)로 번역하도록 프롬프트 강화
             prompt = f"""
-            Listen to this audio and transcribe it in {request.lang} language. 
-            Split the transcription into short sentences. 
-            Estimate the 'start' and 'end' time (in seconds) for each sentence.
+            Listen to this audio. Regardless of the original language spoken in the audio, you MUST translate and summarize the content directly into natural {request.lang} (Korean) language.
+            Split the translated transcription into short, readable sentences. 
+            Estimate the 'start' and 'end' time (in seconds) for each sentence matching the audio timeline.
             Return ONLY a valid JSON array format like this, nothing else:
             [
-              {{"start": 0.0, "end": 2.5, "original": "Hello"}},
-              {{"start": 2.5, "end": 5.0, "original": "World"}}
+              {{"start": 0.0, "end": 2.5, "original": "안녕하세요, 오늘 살펴볼 주제는..."}},
+              {{"start": 2.5, "end": 5.0, "original": "바로 이것입니다."}}
             ]
             """
+            
             
             response = model.generate_content([prompt, audio_file])
             result_text = response.text.strip()
