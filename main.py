@@ -110,27 +110,20 @@ async def process_stt(request: STTRequest):
         genai.configure(api_key=gemini_key)
         
         # 최신 모델 이름 확인
-        model = genai.GenerativeModel('gemini-1.5-flash-Lastest')
-        
-        prompt = f"""
-        Listen to this audio. Regardless of the original language, translate and summarize the content into natural {request.lang} (Korean).
-        Split the translated transcription into short, readable sentences. 
-        Estimate the 'start' and 'end' time (in seconds) for each sentence matching the audio timeline.
-        Return ONLY a valid JSON array format like this, nothing else:
-        [
-          {{"start": 0.0, "end": 2.5, "original": "안녕하세요, 오늘 살펴볼 주제는..."}},
-          {{"start": 2.5, "end": 5.0, "original": "바로 이것입니다."}}
-        ]
-        """
+        # 모델 선언 시 시스템 지시사항을 함께 부여 (추천 방식)
+        model = genai.GenerativeModel(
+            model_name='gemini-1.5-flash',
+            system_instruction=f"Listen to the audio. Regardless of the original language, translate and summarize into natural {request.lang} (Korean). Split into short, readable sentences with 'start' and 'end' times in seconds. Return ONLY a valid JSON array."
+        )
         
         print("Gemini API로 오디오 전송 중...")
         
-        # 파일을 바이너리(바이트) 형태로 직접 읽어서 전송 (upload_file 오류 원천 차단)
         with open(audio_path, "rb") as f:
             audio_bytes = f.read()
             
+        # 프롬프트에는 간단한 요청만, 실제 데이터는 바이너리로 전송
         gemini_response = model.generate_content([
-            prompt,
+            "Analyze this audio and extract the subtitles in the requested JSON format.",
             {
                 "mime_type": "audio/mp3",
                 "data": audio_bytes
