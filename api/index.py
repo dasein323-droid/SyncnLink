@@ -85,12 +85,20 @@ async def process_stt(request: STTRequest):
             youtube_url = f"https://www.youtube.com/watch?v={video_id}"
             
             ydl_opts = {
-                'format': 'm4a/bestaudio',
+                'format': 'm4a/bestaudio/best',
                 'outtmpl': audio_path,
                 'noplaylist': True,
-                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                'quiet': True,
+                # 봇 차단 우회 핵심 설정
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android', 'ios', 'tv'],
+                        'player_skip': ['webpage', 'configs']
+                    }
+                },
                 'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+                    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
                 }
             }
             
