@@ -110,7 +110,13 @@ async def process_stt(request: STTRequest):
             audio_bytes = audio_file.read()
 
         lang_name = "Korean" if request.lang == "ko" else "English"
-        prompt = f"Transcribe to {lang_name}. Return strictly as JSON array: [{{start:s, end:e, text:t}}]"
+        prompt = (
+            f"Listen to the attached audio. If the audio is in another language, TRANSLATE the meaning to {lang_name}. "
+            f"If it is already in {lang_name}, TRANSCRIBE it. "
+            f"CRITICAL: Base your output STRICTLY on the actual audio content. Do NOT hallucinate, guess, or create dummy/sample text (like '유라 씨...'). "
+            f"If the audio contains no speech or is just music, return an empty array []. "
+            f"Return strictly as a valid JSON array: [{{ \"start\": 0.0, \"end\": 1.5, \"text\": \"actual speech\" }}]"
+        )
 
         # 2. 최신 모델 순차 호출 (Fallback) 로직
         models_to_try = [
