@@ -1,11 +1,15 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from youtube_transcript_api import YouTubeTranscriptApi
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
+import yt_dlp
+import google.generativeai as genai
+import tempfile
 import json
+import traceback
+import urllib.request
 
 # Firebase 초기화
 if not firebase_admin._apps:
@@ -54,47 +58,132 @@ async def process_stt(request: STTRequest):
     if cache_doc.exists:
         return {"status": "success", "data": cache_doc.to_dict().get("sttData")}
 
-    # 🚨 핵심: 쿠키 파일 경로 확인
     cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
     has_cookie = os.path.exists(cookie_path)
+    formatted_data = None
 
-    if has_cookie:
-        print(f"✅ [쿠키 확인] {cookie_path} 적용 완료")
-    else:
-        print("❌ [쿠키 누락] cookies.txt 파일이 없습니다. 봇 차단이 발생할 수 있습니다.")
-
-    # [STEP 1] 유튜브 자막 추출 (쿠키 적용)
+    # [STEP 1] yt-dlp를 이용한 자막 직접 추출 (IP 차단 우회)
     try:
-        # 쿠키가 있으면 쿠키를 포함해서 요청 (봇 차단 완벽 우회)
+        print(f"🔍 yt-dlp로 자막 추출 시도: {video_id}")
+        ydl_opts = {
+            'skip_download': True,
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': [request.lang],
+            'quiet': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['tv', 'mweb'], # TV 클라이언트로 위장
+                    'player_skip': ['webpage', 'configs']
+                }
+            }
+        }
         if has_cookie:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, cookies=cookie_path)
-        else:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-            
-        try:
-            # 1. 요청한 언어(ko 또는 en) 자막 찾기
-            transcript = transcript_list.find_transcript([request.lang]).fetch()
-        except:
-            # 2. 없으면 자동 생성 자막이나 다른 언어를 번역해서 가져오기
-            for t in transcript_list:
-                if t.is_translatable:
-                    transcript = t.translate(request.lang).fetch()
-                    break
-            else:
-                raise HTTPException(status_code=404, detail="해당 언어로 번역할 수 있는 자막이 없습니다.")
+            ydl_opts['cookiefile'] = cookie_path
 
-        formatted_data = [{"start": i["start"], "end": i["start"] + i["duration"], "original": i["text"]} for i in transcript]
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+
+        subs = info.get('subtitles', {})
+        auto_subs = info.get('automatic_captions', {})
+
+        # 요청한 언어의 자막 찾기
+        target_sub_list = subs.get(request.lang) or auto_subs.get(request.lang)
+
+        if target_sub_list:
+            # json3 포맷의 자막 URL 추출
+            json3_url = next((sub['url'] for sub in target_sub_list if sub['ext'] == 'json3'), None)
+
+            if json3_url:
+                # 자막 데이터 다운로드 및 파싱
+                req = urllib.request.Request(json3_url)
+                with urllib.request.urlopen(req) as response:
+                    sub_data = json.loads(response.read().decode())
+
+                formatted_data = []
+                for event in sub_data.get('events', []):
+                    if 'segs' in event and 'tStartMs' in event:
+                        start = event['tStartMs'] / 1000.0
+                        duration = event.get('dDurationMs', 0) / 1000.0
+                        text = "".join([seg.get('utf8', '') for seg in event['segs']])
+                        if text.strip() and text.strip() != '\n':
+                            formatted_data.append({
+                                "start": start,
+                                "end": start + duration,
+                                "original": text.strip()
+                            })
+        
+        if not formatted_data:
+            raise Exception("해당 언어의 자막이 존재하지 않습니다.")
 
     except Exception as e:
-        error_msg = str(e)
-        print(f"🚨 자막 추출 실패: {error_msg}")
+        print(f"⚠️ yt-dlp 자막 추출 실패: {e}")
+        formatted_data = None
+
+    # [STEP 2] 자막 추출 실패 시 Gemini STT로 오디오 분석 (Fallback)
+    if not formatted_data:
+        print(f"🎬 자막 없음 감지됨. Gemini STT로 분석을 시작합니다. (비디오: {video_id})")
         
-        if "Subtitles are disabled" in error_msg or "NoTranscriptFound" in error_msg:
-            raise HTTPException(status_code=404, detail="자막을 가져올 수 없습니다. (실제 자막 없음)")
-        elif "cookies provided are not valid" in error_msg:
-            raise HTTPException(status_code=401, detail="서버의 유튜브 쿠키가 만료되었습니다. 관리자에게 문의하세요.")
-        else:
-            raise HTTPException(status_code=500, detail=f"서버 오류: {error_msg}")
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_key:
+            raise HTTPException(status_code=400, detail="서버에 Gemini API Key가 설정되지 않았습니다.")
+            
+        try:
+            temp_dir = tempfile.gettempdir()
+            audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
+            youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+            
+            ydl_opts_audio = {
+                'format': 'm4a/bestaudio/best',
+                'outtmpl': audio_path,
+                'noplaylist': True,
+                'quiet': True,
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['tv', 'mweb'],
+                        'player_skip': ['webpage', 'configs']
+                    }
+                }
+            }
+            if has_cookie:
+                ydl_opts_audio['cookiefile'] = cookie_path
+            
+            with yt_dlp.YoutubeDL(ydl_opts_audio) as ydl:
+                ydl.download([youtube_url])
+                
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel('models/gemini-1.5-flash')
+            audio_file = genai.upload_file(path=audio_path)
+            
+            prompt = f"""
+            Listen to this audio and transcribe it in {request.lang} language. 
+            Split the transcription into short sentences. 
+            Estimate the 'start' and 'end' time (in seconds) for each sentence.
+            Return ONLY a valid JSON array format like this, nothing else:
+            [
+              {{"start": 0.0, "end": 2.5, "original": "Hello"}},
+              {{"start": 2.5, "end": 5.0, "original": "World"}}
+            ]
+            """
+            
+            response = model.generate_content([prompt, audio_file])
+            result_text = response.text.strip()
+            
+            if result_text.startswith("```json"):
+                result_text = result_text[7:-3]
+            elif result_text.startswith("```"):
+                result_text = result_text[3:-3]
+                
+            formatted_data = json.loads(result_text)
+            
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+            genai.delete_file(audio_file.name)
+
+        except Exception as gemini_err:
+            error_msg = traceback.format_exc()
+            print("🚨 Gemini STT 처리 최종 실패:\n", error_msg)
+            raise HTTPException(status_code=500, detail="자막 추출 및 STT 분석에 모두 실패했습니다. (유튜브 봇 차단)")
 
     # 정상 추출된 경우 Firestore에 캐싱
     try:
