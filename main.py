@@ -64,34 +64,42 @@ async def process_stt(request: STTRequest):
     formatted_data = None
 
     try:
-        print(f"[STEP 1] Downloading audio via RapidAPI: {video_id}")
+        print(f"[STEP 1] Downloading audio via NEW RapidAPI: {video_id}")
 
+        # 1. 새 API URL
         rapid_api_url = "https://youtube-convert-mp3-m4a.p.rapidapi.com/v1/social/youtube/audio"
-        querystring = {"id": video_id} 
+        
+        # 2. querystring 대신 payload(Body 데이터) 사용
+        payload = {
+            "id": video_id,
+            "ext": "m4a"
+        } 
 
         headers = {
             "x-rapidapi-key": os.getenv("RAPIDAPI_KEY", ""),
-            "x-rapidapi-host": "youtube-convert-mp3-m4a.p.rapidapi.com"
+            "x-rapidapi-host": "youtube-convert-mp3-m4a.p.rapidapi.com",
+            "Content-Type": "application/json"  # 추가된 헤더
         }
 
-        # API 대기열(Polling) 로직 복구
         max_retries = 10
         audio_url = ""
 
         for attempt in range(max_retries):
-            response = requests.get(rapid_api_url, headers=headers, params=querystring)
+            # 3. GET 요청을 POST 요청으로 변경하고 json=payload 적용
+            response = requests.post(rapid_api_url, headers=headers, json=payload)
             
-            # --- [수정] 디버그 로그 추가 (어떤 데이터가 오는지 확인) ---
             try:
                 response_data = response.json()
                 print(f"[DEBUG] Raw API Response (Attempt {attempt + 1}): {response_data}")
             except Exception as e:
-                raise Exception(f"JSON 파싱 실패. HTTP 상태코드: {response.status_code}, 본문: {response.text}")
-            # -------------------------------------------------------------
+                raise Exception(f"API 응답 파싱 실패. HTTP 코드: {response.status_code}, 본문: {response.text}")
 
-            # 아래의 "link", "msg" 부분은 디버그 로그를 확인한 후 
-            # 새 API의 키 이름에 맞게 변경해야 합니다.
-            audio_url = response_data.get("link", "")
+            # -------------------------------------------------------------
+            # [주의] 아래의 "link"와 "msg"는 기존 API의 키 이름입니다.
+            # 서버에 배포 후 Render 로그의 [DEBUG]를 확인하여 
+            # 새 API가 주는 오디오 주소 키 이름(예: 'url', 'download')으로 직접 교체해야 합니다.
+            # -------------------------------------------------------------
+            audio_url = response_data.get("link", "") 
 
             if response.status_code == 200 and audio_url.startswith("http"):
                 break
@@ -102,7 +110,6 @@ async def process_stt(request: STTRequest):
                 time.sleep(3)
                 continue
             else:
-                # 응답 내용을 그대로 출력하도록 변경
                 raise Exception(f"YouTube API failed: {response_data}")
 
         if not audio_url.startswith("http"):
