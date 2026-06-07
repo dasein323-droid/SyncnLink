@@ -109,7 +109,7 @@ async def process_stt(request: STTRequest):
         genai.configure(api_key=gemini_key)
         
         # 최신 모델 이름 확인
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash-Lastest')
         
         prompt = f"""
         Listen to this audio. Regardless of the original language, translate and summarize the content into natural {request.lang} (Korean).
