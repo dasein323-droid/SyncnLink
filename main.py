@@ -84,12 +84,14 @@ async def process_stt(request: STTRequest):
 
         formatted_data = [{"start": i["start"], "end": i["start"] + i["duration"], "original": i["text"]} for i in transcript]
 
-    except Exception as e:
+except Exception as e:
         error_msg = str(e)
         print(f"🚨 자막 추출 실패: {error_msg}")
         
         if "Subtitles are disabled" in error_msg or "NoTranscriptFound" in error_msg:
-            raise HTTPException(status_code=404, detail="자막을 가져올 수 없습니다. (유튜브 봇 차단 또는 실제 자막 없음)")
+            raise HTTPException(status_code=404, detail="자막을 가져올 수 없습니다. (실제 자막 없음)")
+        elif "cookies provided are not valid" in error_msg:
+            raise HTTPException(status_code=401, detail="서버의 유튜브 쿠키가 만료되었습니다. 관리자에게 문의하세요.")
         else:
             raise HTTPException(status_code=500, detail=f"서버 오류: {error_msg}")
 
