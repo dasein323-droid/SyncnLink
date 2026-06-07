@@ -71,6 +71,8 @@ async def process_stt(request: STTRequest):
 
         formatted_data = [{"start": i["start"], "end": i["start"] + i["duration"], "original": i["text"]} for i in transcript]
 
+# main.py 파일 내의 [STEP 2] Gemini STT 전환 부분 수정
+
     # [STEP 2] 유튜브 자막이 아예 없는 경우 -> Gemini로 전환
     except Exception as e:
         print(f"🎬 자막 없음 감지됨. Gemini STT로 분석을 시작합니다. (비디오: {video_id})")
@@ -89,18 +91,24 @@ async def process_stt(request: STTRequest):
                 'outtmpl': audio_path,
                 'noplaylist': True,
                 'quiet': True,
-                # 봇 차단 우회 핵심 설정
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['android', 'ios', 'tv'],
+                        # iOS 클라이언트로 위장하여 우회 확률 극대화
+                        'player_client': ['ios', 'android', 'tv'],
                         'player_skip': ['webpage', 'configs']
                     }
                 },
                 'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-                    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
                 }
             }
+            
+            # 🚨 핵심: 쿠키 파일이 존재하면 적용하여 봇 차단 완벽 우회
+            cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
+            if os.path.exists(cookie_path):
+                ydl_opts['cookiefile'] = cookie_path
+            else:
+                print("⚠️ cookies.txt 파일이 없습니다. 유튜브 봇 차단이 발생할 수 있습니다.")
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([youtube_url])
@@ -137,8 +145,7 @@ async def process_stt(request: STTRequest):
         except Exception as gemini_err:
             error_msg = traceback.format_exc()
             print("🚨 Gemini STT 처리 최종 실패:\n", error_msg)
-            # Vercel 타임아웃(10초)에 걸릴 확률이 높으므로 명확한 에러 반환
-            raise HTTPException(status_code=500, detail="자막 추출 실패 (영상이 너무 길거나 Vercel 타임아웃 발생)")
+            raise HTTPException(status_code=500, detail="자막 추출 실패 (유튜브 봇 차단 또는 타임아웃)")
 
     # 3. 데이터베이스(Firestore) 저장
     try:
