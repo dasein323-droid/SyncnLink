@@ -10,6 +10,7 @@ import json
 import traceback
 import requests
 import time
+import re
 
 if not firebase_admin._apps:
     try:
@@ -73,31 +74,26 @@ async def process_stt(request: STTRequest):
             "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
         }
 
-        # 최대 재시도 횟수 설정 (예: 10회 = 최대 약 30초 대기)
+        # 1. API 폴링 (대기열 처리) 로직
         max_retries = 10
         audio_url = ""
 
         for attempt in range(max_retries):
             response = requests.get(rapid_api_url, headers=headers, params=querystring)
             response_data = response.json()
-
             audio_url = response_data.get("link", "")
 
-            # 추출 완료: 링크가 정상적으로 수신된 경우 루프 탈출
             if response.status_code == 200 and audio_url.startswith("http"):
                 break
-
-            # 처리 중: 일정 시간 대기 후 재요청
+            
             msg = response_data.get("msg", "")
             if msg == "in process":
                 print(f"API processing video, waiting 3 seconds... (Attempt {attempt + 1}/{max_retries})")
                 time.sleep(3)
                 continue
             else:
-                # 기타 에러 발생 시 즉시 예외 발생
                 raise Exception(f"YouTube API failed: {msg}")
 
-        # 재시도 횟수를 초과했는데도 링크를 받지 못한 경우
         if not audio_url.startswith("http"):
             raise Exception("YouTube API timeout: Audio extraction took too long.")
 
@@ -114,9 +110,9 @@ async def process_stt(request: STTRequest):
             audio_bytes = audio_file.read()
 
         lang_name = "Korean" if request.lang == "ko" else "English"
-        prompt = f"Transcribe to {lang_name}. JSON: [{{start:s, end:e, text:t}}]"
+        prompt = f"Transcribe to {lang_name}. Return strictly as JSON array: [{{start:s, end:e, text:t}}]"
 
-        # 현재 정상적으로 지원되는 최신 정식 모델 목록으로 교체
+        # 2. 최신 모델 순차 호출 (Fallback) 로직
         models_to_try = [
             "gemini-3.5-flash",
             "gemini-2.5-flash",
@@ -140,23 +136,25 @@ async def process_stt(request: STTRequest):
                     ]
                 )
                 print(f"SUCCESS with {model_name}")
-                break  # 성공 시 즉시 반복문 탈출
+                break
             except Exception as e:
                 print(f"WARNING: {model_name} failed. Error: {e}")
-                continue  # 에러 발생 시 다음 모델로 재시도
+                continue
 
         if not response:
             raise Exception("All Gemini model attempts failed.")
 
         result_text = response.text.strip()
 
-        if result_text.startswith("```json"):
-            result_text = result_text[7:-3]
-        elif result_text.startswith("```"):
-            result_text = result_text[3:-3]
-
-        formatted_data = json.loads(result_text)
-        print("SUCCESS: JSON conversion complete")
+        # 3. 정규표현식을 활용한 안전한 JSON 추출 로직
+        json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
+        
+        if json_match:
+            clean_json_str = json_match.group(0)
+            formatted_data = json.loads(clean_json_str)
+            print("SUCCESS: JSON conversion complete")
+        else:
+            raise Exception(f"Failed to extract JSON. Raw response: {result_text[:200]}")
 
         print(f"Rate limit: waiting {RATE_LIMIT_DELAY}s before next request...")
         time.sleep(RATE_LIMIT_DELAY)
