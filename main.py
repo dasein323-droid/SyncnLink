@@ -86,7 +86,7 @@ async def process_stt(request: STTRequest):
         with open(audio_path, 'wb') as f:
             f.write(audio_data)
 
-        print("[STEP 2] Gemini analysis (gemini-1.5-flash)")
+        print("[STEP 2] Gemini analysis (gemini-2.0-flash-exp)")
         gemini_key = os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=gemini_key)
 
@@ -98,7 +98,7 @@ async def process_stt(request: STTRequest):
         prompt = f"Transcribe to {lang_name}. JSON: [{{start:s, end:e, text:t}}]"
 
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash-exp",
             contents=[
                 prompt,
                 genai.types.Part(
@@ -120,7 +120,7 @@ async def process_stt(request: STTRequest):
         formatted_data = json.loads(result_text)
         print("SUCCESS: JSON conversion complete")
 
-        print(f"Waiting {RATE_LIMIT_DELAY}s to avoid rate limit...")
+        print(f"Rate limit: waiting {RATE_LIMIT_DELAY}s before next request...")
         time.sleep(RATE_LIMIT_DELAY)
 
     except Exception as e:
