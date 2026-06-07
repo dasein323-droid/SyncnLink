@@ -5,6 +5,7 @@ from youtube_transcript_api import YouTubeTranscriptApi
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
+import json
 
 # Firebase 초기화
 if not firebase_admin._apps:
@@ -84,7 +85,7 @@ async def process_stt(request: STTRequest):
 
         formatted_data = [{"start": i["start"], "end": i["start"] + i["duration"], "original": i["text"]} for i in transcript]
 
-except Exception as e:
+    except Exception as e:
         error_msg = str(e)
         print(f"🚨 자막 추출 실패: {error_msg}")
         
@@ -110,5 +111,4 @@ except Exception as e:
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
     uvicorn.run("main:app", host="0.0.0.0", port=port)
