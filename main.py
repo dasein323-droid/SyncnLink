@@ -80,7 +80,17 @@ async def process_stt(request: STTRequest):
 
         for attempt in range(max_retries):
             response = requests.get(rapid_api_url, headers=headers, params=querystring)
-            response_data = response.json()
+            
+            # --- [수정] 디버그 로그 추가 (어떤 데이터가 오는지 확인) ---
+            try:
+                response_data = response.json()
+                print(f"[DEBUG] Raw API Response (Attempt {attempt + 1}): {response_data}")
+            except Exception as e:
+                raise Exception(f"JSON 파싱 실패. HTTP 상태코드: {response.status_code}, 본문: {response.text}")
+            # -------------------------------------------------------------
+
+            # 아래의 "link", "msg" 부분은 디버그 로그를 확인한 후 
+            # 새 API의 키 이름에 맞게 변경해야 합니다.
             audio_url = response_data.get("link", "")
 
             if response.status_code == 200 and audio_url.startswith("http"):
@@ -92,7 +102,8 @@ async def process_stt(request: STTRequest):
                 time.sleep(3)
                 continue
             else:
-                raise Exception(f"YouTube API failed: {msg}")
+                # 응답 내용을 그대로 출력하도록 변경
+                raise Exception(f"YouTube API failed: {response_data}")
 
         if not audio_url.startswith("http"):
             raise Exception("YouTube API timeout: Audio extraction took too long.")
