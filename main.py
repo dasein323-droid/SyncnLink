@@ -70,13 +70,8 @@ async def process_stt(request: STTRequest):
             'writesubtitles': True,
             'writeautomaticsub': True,
             'subtitleslangs': [request.lang],
-            'quiet': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['tv', 'mweb'], # TV 클라이언트로 위장
-                    'player_skip': ['webpage', 'configs']
-                }
-            }
+            'quiet': True
+            # extractor_args 블록 전체 삭제
         }
         if has_cookie:
             ydl_opts['cookiefile'] = cookie_path
@@ -138,12 +133,6 @@ async def process_stt(request: STTRequest):
                 'outtmpl': audio_path,
                 'noplaylist': True,
                 'quiet': True,
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['tv', 'mweb'],
-                        'player_skip': ['webpage', 'configs']
-                    }
-                }
             }
             if has_cookie:
                 ydl_opts_audio['cookiefile'] = cookie_path
