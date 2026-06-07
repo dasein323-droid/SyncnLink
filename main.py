@@ -84,17 +84,18 @@ async def process_stt(request: STTRequest):
         response = requests.get(rapid_api_url, headers=headers, params=querystring)
         response_data = response.json()
         
-        # 디버깅을 위해 API 응답 전체를 출력해 봅니다.
         print("API 응답 데이터:", response_data) 
 
-        # 응답 구조 확인 (status가 "ok"이거나 "link"가 존재하는지 확인)
-        if response.status_code != 200 or "link" not in response_data:
+        # [수정된 부분] link 항목이 아예 없거나, 빈 문자열("")인 경우 모두 걸러냅니다.
+        audio_url = response_data.get("link", "")
+        
+        if response.status_code != 200 or not audio_url.startswith("http"):
             # 실패 원인을 정확히 로그에 남깁니다.
-            error_msg = response_data.get("msg") or response_data.get("message") or "알 수 없는 오류"
+            error_msg = response_data.get("msg") or response_data.get("message") or "API가 유효한 다운로드 링크를 제공하지 않았습니다."
+            print("🚨 API 에러 전체 응답:", response_data)
             raise Exception(f"외부 API 실패: {error_msg}")
 
         # 오디오 파일 다운로드 및 서버 임시 저장
-        audio_url = response_data["link"]
         print("오디오 다운로드 링크 확보 성공, 다운로드 중...")
         
         audio_data = requests.get(audio_url).content
