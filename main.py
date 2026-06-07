@@ -66,12 +66,12 @@ async def process_stt(request: STTRequest):
     try:
         print(f"[STEP 1] Downloading audio via RapidAPI: {video_id}")
 
-        rapid_api_url = "https://youtube-mp36.p.rapidapi.com/dl"
+        rapid_api_url = "https://youtube-convert-mp3-m4a.p.rapidapi.com/v1/social/youtube/audio"
         querystring = {"id": video_id} 
 
         headers = {
             "x-rapidapi-key": os.getenv("RAPIDAPI_KEY", ""),
-            "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
+            "x-rapidapi-host": "youtube-convert-mp3-m4a.p.rapidapi.com"
         }
 
         # API 대기열(Polling) 로직 복구
