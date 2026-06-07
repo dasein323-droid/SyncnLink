@@ -45,11 +45,6 @@ class STTRequest(BaseModel):
     videoId: str
     lang: str
 
-import requests
-import tempfile
-import os
-import json
-import google.generativeai as genai
 
 # ... (FastAPI 및 Firebase 초기화 코드는 동일) ...
 
@@ -74,26 +69,39 @@ async def process_stt(request: STTRequest):
         # [STEP 1] 외부 API를 활용한 오디오 다운로드 (yt-dlp 대체)
         print(f"🔄 외부 API를 통해 오디오 확보 시작: {video_id}")
         
-        # 주의: 아래 API 엔드포인트와 헤더는 RapidAPI에서 선택한 서비스에 맞게 변경해야 합니다.
-        # 예시: 'Youtube MP3 Downloader' API 사용 가정
+        # 검증된 Youtube MP36 API 엔드포인트
         rapid_api_url = "https://youtube-mp36.p.rapidapi.com/dl"
-        querystring = {"id": video_id}
+        
+        # 중요: url 전체가 아닌 video_id만 전달해야 합니다.
+        querystring = {"id": video_id} 
+        
         headers = {
-            "x-rapidapi-key": os.getenv("4966da32e6msh7182c742dac2424p10afb7jsn0d01b22c96ff"), # 환경변수에 키 추가 필요
+            "x-rapidapi-key": os.getenv("4966da32e6msh7182c742dac2424p10afb7jsn0d01b22c96ff"), # Render 환경변수에 등록된 키
             "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
         }
 
+        print("API 요청 중...")
         response = requests.get(rapid_api_url, headers=headers, params=querystring)
         response_data = response.json()
+        
+        # 디버깅을 위해 API 응답 전체를 출력해 봅니다.
+        print("API 응답 데이터:", response_data) 
 
+        # 응답 구조 확인 (status가 "ok"이거나 "link"가 존재하는지 확인)
         if response.status_code != 200 or "link" not in response_data:
-            raise Exception("외부 API에서 오디오 링크를 가져오지 못했습니다.")
+            # 실패 원인을 정확히 로그에 남깁니다.
+            error_msg = response_data.get("msg") or response_data.get("message") or "알 수 없는 오류"
+            raise Exception(f"외부 API 실패: {error_msg}")
 
         # 오디오 파일 다운로드 및 서버 임시 저장
         audio_url = response_data["link"]
+        print("오디오 다운로드 링크 확보 성공, 다운로드 중...")
+        
         audio_data = requests.get(audio_url).content
         with open(audio_path, 'wb') as f:
             f.write(audio_data)
+        
+        print("오디오 파일 임시 저장 완료.")
 
         # [STEP 2] Gemini STT로 번역 및 타임라인 추출
         print(f"🎬 오디오 확보 성공. Gemini STT 분석을 시작합니다.")
