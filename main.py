@@ -109,26 +109,11 @@ async def process_stt(request: STTRequest):
         gemini_key = os.getenv("GEMINI_API_KEY")
         genai.configure(api_key=gemini_key)
         
-        # --- 🚨 추가된 자동 모델 탐색 로직 ---
-        print("구글 서버에서 사용 가능한 모델을 검색합니다...")
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        print(f"✅ 내 API 키로 사용 가능한 모델 목록: {available_models}")
-        
-        target_model = 'gemini-1.5-flash' # 기본값
-        
-        # 목록에서 1.5-flash 찾기
-        flash_models = [m.replace('models/', '') for m in available_models if '1.5-flash' in m]
-        # 없다면 1.5-pro라도 찾기
-        pro_models = [m.replace('models/', '') for m in available_models if '1.5-pro' in m]
-        
-        if flash_models:
-            target_model = flash_models[0]
-        elif pro_models:
-            target_model = pro_models[0]
-            
+        # 로그에서 확인된 사용 가능한 최신 모델로 고정합니다.
+        target_model = 'gemini-3.5-flash'
         print(f"🚀 최종 선택된 모델: {target_model}")
+        
         model = genai.GenerativeModel(target_model)
-        # ----------------------------------
         
         prompt = f"""
         Listen to this audio. Regardless of the original language, translate and summarize the content into natural {request.lang} (Korean).
