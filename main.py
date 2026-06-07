@@ -5,19 +5,17 @@ from youtube_transcript_api import YouTubeTranscriptApi
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
-import yt_dlp
-import google.generativeai as genai
-import tempfile
-import json
-import traceback
 
-# Firebase 초기화 (환경변수 누락 시 에러 방지)
+# Firebase 초기화
 if not firebase_admin._apps:
     try:
+        raw_private_key = os.getenv("FIREBASE_PRIVATE_KEY", "")
+        clean_private_key = raw_private_key.strip('"').replace('\\n', '\n')
+
         cred_json = {
             "type": "service_account",
             "project_id": os.getenv("FIREBASE_PROJECT_ID"),
-            "private_key": os.getenv("FIREBASE_PRIVATE_KEY", "").replace('\\n', '\n'),
+            "private_key": clean_private_key,
             "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
             "token_uri": "https://oauth2.googleapis.com/token",
         }
@@ -30,7 +28,6 @@ if not firebase_admin._apps:
 
 app = FastAPI()
 
-# CORS 설정 추가 (통신 오류 방지)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -40,7 +37,7 @@ app.add_middleware(
 )
 
 class STTRequest(BaseModel):
-    videoId: str  # url 대신 videoId를 직접 받음
+    videoId: str
     lang: str
 
 @app.post("/api/stt")
@@ -56,101 +53,47 @@ async def process_stt(request: STTRequest):
     if cache_doc.exists:
         return {"status": "success", "data": cache_doc.to_dict().get("sttData")}
 
-    # 🚨 쿠키 파일 경로 확인 및 디버깅
+    # 🚨 핵심: 쿠키 파일 경로 확인
     cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
     has_cookie = os.path.exists(cookie_path)
-    
-    if has_cookie:
-        print(f"✅ [쿠키 확인] {cookie_path} 파일을 찾았습니다. (크기: {os.path.getsize(cookie_path)} bytes)")
-    else:
-        print(f"❌ [쿠키 누락] {cookie_path} 파일이 없습니다! 봇 차단 에러가 발생할 확률이 높습니다.")
 
-    # [STEP 1] 유튜브 자막 1차 시도 (여기도 쿠키 적용)
+    if has_cookie:
+        print(f"✅ [쿠키 확인] {cookie_path} 적용 완료")
+    else:
+        print("❌ [쿠키 누락] cookies.txt 파일이 없습니다. 봇 차단이 발생할 수 있습니다.")
+
+    # [STEP 1] 유튜브 자막 추출 (쿠키 적용)
     try:
+        # 쿠키가 있으면 쿠키를 포함해서 요청 (봇 차단 완벽 우회)
         if has_cookie:
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, cookies=cookie_path)
         else:
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
         try:
+            # 1. 요청한 언어(ko 또는 en) 자막 찾기
             transcript = transcript_list.find_transcript([request.lang]).fetch()
         except:
+            # 2. 없으면 자동 생성 자막이나 다른 언어를 번역해서 가져오기
             for t in transcript_list:
                 if t.is_translatable:
                     transcript = t.translate(request.lang).fetch()
                     break
             else:
-                raise Exception("번역 가능한 자막 없음")
+                raise HTTPException(status_code=404, detail="해당 언어로 번역할 수 있는 자막이 없습니다.")
 
         formatted_data = [{"start": i["start"], "end": i["start"] + i["duration"], "original": i["text"]} for i in transcript]
 
-    # [STEP 2] 유튜브 자막이 아예 없는 경우 -> Gemini로 전환
     except Exception as e:
-        print(f"🎬 자막 없음 감지됨. Gemini STT로 분석을 시작합니다. (비디오: {video_id})")
+        error_msg = str(e)
+        print(f"🚨 자막 추출 실패: {error_msg}")
         
-        gemini_key = os.getenv("GEMINI_API_KEY")
-        if not gemini_key:
-            raise HTTPException(status_code=400, detail="서버에 Gemini API Key가 설정되지 않았습니다.")
-            
-        try:
-            temp_dir = tempfile.gettempdir()
-            audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
-            youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-            
-            ydl_opts = {
-                'format': 'm4a/bestaudio/best',
-                'outtmpl': audio_path,
-                'noplaylist': True,
-                'quiet': True,
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['tv', 'mweb'],
-                        'player_skip': ['webpage', 'configs']
-                    }
-                }
-            }
-            
-            # yt-dlp에 쿠키 적용
-            if has_cookie:
-                ydl_opts['cookiefile'] = cookie_path
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([youtube_url])
-                
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel('models/gemini-1.5-flash')
-            audio_file = genai.upload_file(path=audio_path)
-            
-            prompt = f"""
-            Listen to this audio and transcribe it in {request.lang} language. 
-            Split the transcription into short sentences. 
-            Estimate the 'start' and 'end' time (in seconds) for each sentence.
-            Return ONLY a valid JSON array format like this, nothing else:
-            [
-              {{"start": 0.0, "end": 2.5, "original": "Hello"}},
-              {{"start": 2.5, "end": 5.0, "original": "World"}}
-            ]
-            """
-            
-            response = model.generate_content([prompt, audio_file])
-            result_text = response.text.strip()
-            
-            if result_text.startswith("```json"):
-                result_text = result_text[7:-3]
-            elif result_text.startswith("```"):
-                result_text = result_text[3:-3]
-                
-            formatted_data = json.loads(result_text)
-            
-            if os.path.exists(audio_path):
-                os.remove(audio_path)
-            genai.delete_file(audio_file.name)
+        if "Subtitles are disabled" in error_msg or "NoTranscriptFound" in error_msg:
+            raise HTTPException(status_code=404, detail="자막을 가져올 수 없습니다. (유튜브 봇 차단 또는 실제 자막 없음)")
+        else:
+            raise HTTPException(status_code=500, detail=f"서버 오류: {error_msg}")
 
-        except Exception as gemini_err:
-            error_msg = traceback.format_exc()
-            print("🚨 Gemini STT 처리 최종 실패:\n", error_msg)
-            raise HTTPException(status_code=500, detail="자막 추출 실패 (유튜브 봇 차단 또는 타임아웃)")
-
+    # 정상 추출된 경우 Firestore에 캐싱
     try:
         cache_ref.set({
             "sttData": formatted_data,
@@ -165,4 +108,5 @@ async def process_stt(request: STTRequest):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
     uvicorn.run("main:app", host="0.0.0.0", port=port)
