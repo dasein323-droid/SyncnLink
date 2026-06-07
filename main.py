@@ -116,10 +116,11 @@ async def process_stt(request: STTRequest):
         lang_name = "Korean" if request.lang == "ko" else "English"
         prompt = f"Transcribe to {lang_name}. JSON: [{{start:s, end:e, text:t}}]"
 
-        # 사용 가능한 제미나이 정식 모델을 순차적으로 시도 (대체 로직)
+        # 현재 정상적으로 지원되는 최신 정식 모델 목록으로 교체
         models_to_try = [
-            "gemini-2.0-flash", 
-            "gemini-1.5-flash",
+            "gemini-3.5-flash",
+            "gemini-2.5-flash",
+            "gemini-3.1-flash-lite"
         ]
 
         response = None
