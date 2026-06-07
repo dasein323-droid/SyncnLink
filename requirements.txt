@@ -2,5 +2,5 @@ fastapi==0.104.1
 pydantic==2.4.2
 youtube-transcript-api==0.6.1
 firebase-admin==6.2.0
-yt-dlp
+yt-dlp>=2024.04.09
 google-generativeai==0.4.1
