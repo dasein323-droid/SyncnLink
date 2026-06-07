@@ -106,7 +106,7 @@ async def process_stt(request: STTRequest):
         with open(audio_path, 'wb') as f:
             f.write(audio_data)
 
-        print("[STEP 2] Gemini analysis (gemini-2.0-flash-exp)")
+        print("[STEP 2] Gemini analysis")
         gemini_key = os.getenv("GEMINI_API_KEY")
         client = genai.Client(api_key=gemini_key)
 
@@ -114,21 +114,38 @@ async def process_stt(request: STTRequest):
             audio_bytes = audio_file.read()
 
         lang_name = "Korean" if request.lang == "ko" else "English"
-
         prompt = f"Transcribe to {lang_name}. JSON: [{{start:s, end:e, text:t}}]"
 
-        response = client.models.generate_content(
-            model="gemini-2.0-flash-exp",
-            contents=[
-                prompt,
-                genai.types.Part(
-                    inline_data=genai.types.Blob(
-                        mime_type="audio/mpeg",
-                        data=audio_bytes
-                    )
+        # 사용 가능한 제미나이 정식 모델을 순차적으로 시도 (대체 로직)
+        models_to_try = [
+            "gemini-2.0-flash", 
+            "gemini-1.5-flash",
+        ]
+
+        response = None
+        for model_name in models_to_try:
+            try:
+                print(f"Trying Gemini model: {model_name}...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        prompt,
+                        genai.types.Part(
+                            inline_data=genai.types.Blob(
+                                mime_type="audio/mpeg",
+                                data=audio_bytes
+                            )
+                        )
+                    ]
                 )
-            ]
-        )
+                print(f"SUCCESS with {model_name}")
+                break  # 성공 시 즉시 반복문 탈출
+            except Exception as e:
+                print(f"WARNING: {model_name} failed. Error: {e}")
+                continue  # 에러 발생 시 다음 모델로 재시도
+
+        if not response:
+            raise Exception("All Gemini model attempts failed.")
 
         result_text = response.text.strip()
 
