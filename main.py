@@ -106,24 +106,48 @@ async def process_stt(request: STTRequest):
 
         # [STEP 2] Gemini STT로 번역 및 타임라인 추출
         print(f"🎬 오디오 확보 성공. Gemini STT 분석을 시작합니다.")
-        gemini_key = os.getenv("GEMINI_API_KEY") # Render 환경변수에 등록되어 있어야 함
+        gemini_key = os.getenv("GEMINI_API_KEY")
         genai.configure(api_key=gemini_key)
         
-        # 최신 모델 이름 확인
-        # 모델 선언 시 시스템 지시사항을 함께 부여 (추천 방식)
-        model = genai.GenerativeModel(
-            model_name='gemini-1.5-flash',
-            system_instruction=f"Listen to the audio. Regardless of the original language, translate and summarize into natural {request.lang} (Korean). Split into short, readable sentences with 'start' and 'end' times in seconds. Return ONLY a valid JSON array."
-        )
+        # --- 🚨 추가된 자동 모델 탐색 로직 ---
+        print("구글 서버에서 사용 가능한 모델을 검색합니다...")
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        print(f"✅ 내 API 키로 사용 가능한 모델 목록: {available_models}")
+        
+        target_model = 'gemini-1.5-flash' # 기본값
+        
+        # 목록에서 1.5-flash 찾기
+        flash_models = [m.replace('models/', '') for m in available_models if '1.5-flash' in m]
+        # 없다면 1.5-pro라도 찾기
+        pro_models = [m.replace('models/', '') for m in available_models if '1.5-pro' in m]
+        
+        if flash_models:
+            target_model = flash_models[0]
+        elif pro_models:
+            target_model = pro_models[0]
+            
+        print(f"🚀 최종 선택된 모델: {target_model}")
+        model = genai.GenerativeModel(target_model)
+        # ----------------------------------
+        
+        prompt = f"""
+        Listen to this audio. Regardless of the original language, translate and summarize the content into natural {request.lang} (Korean).
+        Split the translated transcription into short, readable sentences. 
+        Estimate the 'start' and 'end' time (in seconds) for each sentence matching the audio timeline.
+        Return ONLY a valid JSON array format like this, nothing else:
+        [
+          {{"start": 0.0, "end": 2.5, "original": "안녕하세요, 오늘 살펴볼 주제는..."}},
+          {{"start": 2.5, "end": 5.0, "original": "바로 이것입니다."}}
+        ]
+        """
         
         print("Gemini API로 오디오 전송 중...")
         
         with open(audio_path, "rb") as f:
             audio_bytes = f.read()
             
-        # 프롬프트에는 간단한 요청만, 실제 데이터는 바이너리로 전송
         gemini_response = model.generate_content([
-            "Analyze this audio and extract the subtitles in the requested JSON format.",
+            prompt,
             {
                 "mime_type": "audio/mp3",
                 "data": audio_bytes
@@ -132,7 +156,6 @@ async def process_stt(request: STTRequest):
         
         result_text = gemini_response.text.strip()
         print("Gemini 응답 완료. JSON 변환 시도...")
-        result_text = gemini_response.text.strip()
         
         if result_text.startswith("```json"):
             result_text = result_text[7:-3]
