@@ -85,33 +85,28 @@ async def process_stt(request: STTRequest):
         audio_url = ""
 
         for attempt in range(max_retries):
-            # 3. GET 요청을 POST 요청으로 변경하고 json=payload 적용
             response = requests.post(rapid_api_url, headers=headers, json=payload)
             
             try:
                 response_data = response.json()
-                print(f"[DEBUG] Raw API Response (Attempt {attempt + 1}): {response_data}")
+                # print(f"[DEBUG] Raw API Response: {response_data}") # 필요시 주석 처리
             except Exception as e:
                 raise Exception(f"API 응답 파싱 실패. HTTP 코드: {response.status_code}, 본문: {response.text}")
 
-            # -------------------------------------------------------------
-            # [주의] 아래의 "link"와 "msg"는 기존 API의 키 이름입니다.
-            # 서버에 배포 후 Render 로그의 [DEBUG]를 확인하여 
-            # 새 API가 주는 오디오 주소 키 이름(예: 'url', 'download')으로 직접 교체해야 합니다.
-            # -------------------------------------------------------------
-            audio_url = response_data.get("link", "") 
+            # 새 API의 응답 키 이름인 "linkDownload"로 변경
+            audio_url = response_data.get("linkDownload", "")
 
+            # 정상적으로 링크를 받았다면 반복문 탈출
             if response.status_code == 200 and audio_url.startswith("http"):
                 break
             
-            msg = response_data.get("msg", "")
-            if msg == "in process":
-                print(f"API processing video, waiting 3 seconds... (Attempt {attempt + 1}/{max_retries})")
-                time.sleep(3)
-                continue
-            else:
+            # 새 API는 "error" 키가 True일 때 실패를 의미함
+            if response_data.get("error") is True:
                 raise Exception(f"YouTube API failed: {response_data}")
 
+            # 혹시 모를 지연을 위해 대기 후 재시도
+            time.sleep(3)
+            
         if not audio_url.startswith("http"):
             raise Exception("YouTube API timeout: Audio extraction took too long.")
 
