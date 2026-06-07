@@ -73,13 +73,33 @@ async def process_stt(request: STTRequest):
             "x-rapidapi-host": "youtube-mp36.p.rapidapi.com"
         }
 
-        response = requests.get(rapid_api_url, headers=headers, params=querystring)
-        response_data = response.json()
+        # 최대 재시도 횟수 설정 (예: 10회 = 최대 약 30초 대기)
+        max_retries = 10
+        audio_url = ""
 
-        audio_url = response_data.get("link", "")
+        for attempt in range(max_retries):
+            response = requests.get(rapid_api_url, headers=headers, params=querystring)
+            response_data = response.json()
 
-        if response.status_code != 200 or not audio_url.startswith("http"):
-            raise Exception(f"YouTube API failed: {response_data.get('msg')}")
+            audio_url = response_data.get("link", "")
+
+            # 추출 완료: 링크가 정상적으로 수신된 경우 루프 탈출
+            if response.status_code == 200 and audio_url.startswith("http"):
+                break
+
+            # 처리 중: 일정 시간 대기 후 재요청
+            msg = response_data.get("msg", "")
+            if msg == "in process":
+                print(f"API processing video, waiting 3 seconds... (Attempt {attempt + 1}/{max_retries})")
+                time.sleep(3)
+                continue
+            else:
+                # 기타 에러 발생 시 즉시 예외 발생
+                raise Exception(f"YouTube API failed: {msg}")
+
+        # 재시도 횟수를 초과했는데도 링크를 받지 못한 경우
+        if not audio_url.startswith("http"):
+            raise Exception("YouTube API timeout: Audio extraction took too long.")
 
         print("Downloading audio...")
         audio_data = requests.get(audio_url).content
