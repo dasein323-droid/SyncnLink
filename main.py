@@ -8,9 +8,9 @@ from google import genai
 import tempfile
 import json
 import traceback
+import requests
 import time
 import re
-from pytubefix import YouTube  # ✅ 추가
 
 if not firebase_admin._apps:
     try:
@@ -60,31 +60,60 @@ async def process_stt(request: STTRequest):
         return {"status": "success", "data": cache_doc.to_dict().get("sttData")}
 
     temp_dir = tempfile.gettempdir()
-    audio_path = None
+    audio_path = os.path.join(temp_dir, f"{video_id}.mp3")
     formatted_data = None
 
     try:
-        # ✅ [STEP 1] pytubefix로 광고 없이 본 영상 오디오만 직접 추출
-        print(f"[STEP 1] Downloading audio via pytubefix: {video_id}")
+        print(f"[STEP 1] Downloading audio via NEW RapidAPI: {video_id}")
 
-        yt = YouTube(f"https://www.youtube.com/watch?v={video_id}")
+        # 1. 새 API URL
+        rapid_api_url = "https://youtube-convert-mp3-m4a.p.rapidapi.com/v1/social/youtube/audio"
+        
+        # 2. querystring 대신 payload(Body 데이터) 사용
+        payload = {
+            "id": video_id,
+            "ext": "m4a"
+        } 
 
-        audio_stream = (
-            yt.streams
-            .filter(only_audio=True)
-            .order_by("abr")
-            .last()
-        )
+        headers = {
+            "x-rapidapi-key": os.getenv("RAPIDAPI_KEY", ""),
+            "x-rapidapi-host": "youtube-convert-mp3-m4a.p.rapidapi.com",
+            "Content-Type": "application/json"  # 추가된 헤더
+        }
 
-        if not audio_stream:
-            raise Exception("No audio stream found for this video.")
+        max_retries = 10
+        audio_url = ""
 
-        audio_path = audio_stream.download(
-            output_path=temp_dir,
-            filename=f"{video_id}.mp4"
-        )
+        for attempt in range(max_retries):
+            response = requests.post(rapid_api_url, headers=headers, json=payload)
+            
+            try:
+                response_data = response.json()
+                # print(f"[DEBUG] Raw API Response: {response_data}") # 필요시 주석 처리
+            except Exception as e:
+                raise Exception(f"API 응답 파싱 실패. HTTP 코드: {response.status_code}, 본문: {response.text}")
 
-        print(f"[STEP 1] Audio downloaded: {audio_path}")
+            # 새 API의 응답 키 이름인 "linkDownload"로 변경
+            audio_url = response_data.get("linkDownload", "")
+
+            # 정상적으로 링크를 받았다면 반복문 탈출
+            if response.status_code == 200 and audio_url.startswith("http"):
+                break
+            
+            # 새 API는 "error" 키가 True일 때 실패를 의미함
+            if response_data.get("error") is True:
+                raise Exception(f"YouTube API failed: {response_data}")
+
+            # 혹시 모를 지연을 위해 대기 후 재시도
+            time.sleep(3)
+            
+        if not audio_url.startswith("http"):
+            raise Exception("YouTube API timeout: Audio extraction took too long.")
+
+        print("Downloading audio...")
+        audio_data = requests.get(audio_url).content
+        with open(audio_path, 'wb') as f:
+            f.write(audio_data)
 
         print("[STEP 2] Gemini analysis")
         gemini_key = os.getenv("GEMINI_API_KEY")
@@ -94,7 +123,8 @@ async def process_stt(request: STTRequest):
             audio_bytes = audio_file.read()
 
         lang_name = "Korean" if request.lang == "ko" else "English"
-
+        
+        # 강력한 광고 무시 및 환각 억제 프롬프트 적용
         prompt = (
             f"Listen to the attached audio. If the audio is in another language, TRANSLATE the meaning to {lang_name}. "
             f"If it is already in {lang_name}, TRANSCRIBE it. "
@@ -109,9 +139,7 @@ async def process_stt(request: STTRequest):
         models_to_try = [
             "gemini-3.5-flash",
             "gemini-2.5-flash",
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-            "gemini-1.5-flash"
+            "gemini-3.1-flash-lite"
         ]
 
         response = None
@@ -124,7 +152,7 @@ async def process_stt(request: STTRequest):
                         prompt,
                         genai.types.Part(
                             inline_data=genai.types.Blob(
-                                mime_type="audio/mp4",  # ✅ mp4 컨테이너
+                                mime_type="audio/mpeg",
                                 data=audio_bytes
                             )
                         )
@@ -141,8 +169,9 @@ async def process_stt(request: STTRequest):
 
         result_text = response.text.strip()
 
+        # 정규표현식을 활용한 안전한 JSON 추출
         json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
-
+        
         if json_match:
             clean_json_str = json_match.group(0)
             formatted_data = json.loads(clean_json_str)
@@ -158,7 +187,7 @@ async def process_stt(request: STTRequest):
         print(traceback.format_exc())
 
     finally:
-        if audio_path and os.path.exists(audio_path):
+        if os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
             except:
@@ -184,3 +213,4 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
