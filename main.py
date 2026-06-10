@@ -11,6 +11,7 @@ import traceback
 import requests
 import time
 import re
+from mutagen import File  # 음원 길이 측정을 위한 라이브러리
 
 if not firebase_admin._apps:
     try:
@@ -46,6 +47,25 @@ class STTRequest(BaseModel):
 
 RATE_LIMIT_DELAY = 65
 
+# 🚨 yt-dlp 없이 순수 requests와 정규식으로 원본 영상 길이 추출
+def get_original_video_duration(video_id: str) -> float:
+    try:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            # 유튜브 HTML 소스코드 내부에 있는 "lengthSeconds":"초" 데이터를 정규식으로 추출
+            match = re.search(r'"lengthSeconds":"(\d+)"', response.text)
+            if match:
+                return float(match.group(1))
+    except Exception as e:
+        print(f"⚠️ 원본 영상 길이 추출 실패 (무시하고 진행): {e}")
+    
+    return 0.0
+
 @app.post("/api/stt")
 async def process_stt(request: STTRequest):
     video_id = request.videoId
@@ -60,60 +80,83 @@ async def process_stt(request: STTRequest):
         return {"status": "success", "data": cache_doc.to_dict().get("sttData")}
 
     temp_dir = tempfile.gettempdir()
-    audio_path = os.path.join(temp_dir, f"{video_id}.mp3")
+    audio_path = os.path.join(temp_dir, f"{video_id}.m4a")
     formatted_data = None
 
     try:
-        print(f"[STEP 1] Downloading audio via NEW RapidAPI: {video_id}")
+        # [STEP 0] 원본 영상 길이 확인 (yt-dlp 미사용)
+        original_duration = get_original_video_duration(video_id)
+        print(f"📺 원본 영상 길이: {original_duration}초")
 
-        # 1. 새 API URL
+        print(f"[STEP 1] Downloading audio via RapidAPI: {video_id}")
         rapid_api_url = "https://youtube-convert-mp3-m4a.p.rapidapi.com/v1/social/youtube/audio"
-        
-        # 2. querystring 대신 payload(Body 데이터) 사용
-        payload = {
-            "id": video_id,
-            "ext": "m4a"
-        } 
-
+        payload = {"id": video_id, "ext": "m4a"} 
         headers = {
             "x-rapidapi-key": os.getenv("RAPIDAPI_KEY", ""),
             "x-rapidapi-host": "youtube-convert-mp3-m4a.p.rapidapi.com",
-            "Content-Type": "application/json"  # 추가된 헤더
+            "Content-Type": "application/json"
         }
 
-        max_retries = 10
-        audio_url = ""
+        max_ad_retries = 3 # 광고 추출 시 최대 재시도 횟수
+        valid_audio_downloaded = False
 
-        for attempt in range(max_retries):
-            response = requests.post(rapid_api_url, headers=headers, json=payload)
+        # 🚨 광고 필터링 및 재요청(Retry) 루프
+        for ad_attempt in range(max_ad_retries):
+            print(f"🔄 오디오 추출 시도 {ad_attempt + 1}/{max_ad_retries}...")
             
+            audio_url = ""
+            max_api_retries = 10
+            
+            # API 링크 획득 루프
+            for attempt in range(max_api_retries):
+                response = requests.post(rapid_api_url, headers=headers, json=payload)
+                try:
+                    response_data = response.json()
+                except Exception:
+                    raise Exception(f"API 응답 파싱 실패. HTTP 코드: {response.status_code}")
+
+                audio_url = response_data.get("linkDownload", "")
+
+                if response.status_code == 200 and audio_url.startswith("http"):
+                    break
+                
+                if response_data.get("error") is True:
+                    raise Exception(f"YouTube API failed: {response_data}")
+
+                time.sleep(3)
+                
+            if not audio_url.startswith("http"):
+                raise Exception("YouTube API timeout: Audio extraction took too long.")
+
+            print("⬇️ Downloading audio file...")
+            audio_data = requests.get(audio_url).content
+            with open(audio_path, 'wb') as f:
+                f.write(audio_data)
+
+            # 🚨 다운로드된 음원 길이 검증
             try:
-                response_data = response.json()
-                # print(f"[DEBUG] Raw API Response: {response_data}") # 필요시 주석 처리
+                audio_file_meta = File(audio_path)
+                downloaded_duration = audio_file_meta.info.length if audio_file_meta else 0.0
+                print(f"🎵 다운로드된 음원 길이: {downloaded_duration:.2f}초")
             except Exception as e:
-                raise Exception(f"API 응답 파싱 실패. HTTP 코드: {response.status_code}, 본문: {response.text}")
+                print(f"⚠️ 음원 길이 분석 실패: {e}")
+                downloaded_duration = 0.0
 
-            # 새 API의 응답 키 이름인 "linkDownload"로 변경
-            audio_url = response_data.get("linkDownload", "")
-
-            # 정상적으로 링크를 받았다면 반복문 탈출
-            if response.status_code == 200 and audio_url.startswith("http"):
-                break
+            # 검증 로직: 원본 길이가 확인되었고, 다운로드된 음원이 원본보다 15초 이상 짧다면 광고로 간주
+            if original_duration > 0 and downloaded_duration > 0:
+                if downloaded_duration < (original_duration - 15):
+                    print(f"🚫 [광고 감지] 원본({original_duration}초)에 비해 음원({downloaded_duration:.2f}초)이 너무 짧습니다. 광고로 간주하고 폐기합니다.")
+                    os.remove(audio_path) # 잘못된 파일 폐기
+                    time.sleep(2) # 2초 지연 후 재요청 (세션 타이밍 변경)
+                    continue # 다음 시도로 넘어감
             
-            # 새 API는 "error" 키가 True일 때 실패를 의미함
-            if response_data.get("error") is True:
-                raise Exception(f"YouTube API failed: {response_data}")
+            # 검증 통과 시 루프 탈출
+            print("✅ 정상적인 본 영상 음원으로 판별되었습니다.")
+            valid_audio_downloaded = True
+            break
 
-            # 혹시 모를 지연을 위해 대기 후 재시도
-            time.sleep(3)
-            
-        if not audio_url.startswith("http"):
-            raise Exception("YouTube API timeout: Audio extraction took too long.")
-
-        print("Downloading audio...")
-        audio_data = requests.get(audio_url).content
-        with open(audio_path, 'wb') as f:
-            f.write(audio_data)
+        if not valid_audio_downloaded:
+            raise Exception("연속된 재시도에도 불구하고 계속해서 광고 음원이 추출되었습니다.")
 
         print("[STEP 2] Gemini analysis")
         gemini_key = os.getenv("GEMINI_API_KEY")
@@ -124,7 +167,6 @@ async def process_stt(request: STTRequest):
 
         lang_name = "Korean" if request.lang == "ko" else "English"
         
-        # 강력한 광고 무시 및 환각 억제 프롬프트 적용
         prompt = (
             f"Listen to the attached audio. If the audio is in another language, TRANSLATE the meaning to {lang_name}. "
             f"If it is already in {lang_name}, TRANSCRIBE it. "
@@ -152,7 +194,7 @@ async def process_stt(request: STTRequest):
                         prompt,
                         genai.types.Part(
                             inline_data=genai.types.Blob(
-                                mime_type="audio/mpeg",
+                                mime_type="audio/mp4",
                                 data=audio_bytes
                             )
                         )
@@ -169,7 +211,6 @@ async def process_stt(request: STTRequest):
 
         result_text = response.text.strip()
 
-        # 정규표현식을 활용한 안전한 JSON 추출
         json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
         
         if json_match:
@@ -213,4 +254,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
