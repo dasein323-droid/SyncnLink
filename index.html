@@ -265,13 +265,11 @@
     let player = null;
     let syncInterval;
 
-    // 유튜브 Video ID 추출 함수
     function extractVideoID(url) {
         const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
         return match ? match[1] : null;
     }
 
-    // YouTube API 로드 완료 시 호출되는 기본 함수 (내용은 비워둠)
     function onYouTubeIframeAPIReady() {
         console.log("YouTube API Ready");
     }
@@ -284,53 +282,79 @@
             return alert(window.currentLang === 'ko' ? "유효한 유튜브 영상 링크를 입력해주세요." : "Invalid YouTube URL.");
         }
 
-        // 💡 핵심 수정: 플레이어가 없으면 새로 생성하고, 있으면 영상만 교체
+        const statusBadge = document.getElementById('stt-status');
+        statusBadge.className = 'status-badge status-loading';
+        statusBadge.innerText = "영상 정보 로드 중...";
+
+        // 플레이어 준비 및 영상 로드
         if (!player) {
             player = new YT.Player('player', {
                 height: '100%', 
                 width: '100%', 
-                videoId: videoId, // 추출한 ID를 바로 넣어서 생성
+                videoId: videoId,
                 playerVars: { 'playsinline': 1, 'controls': 1, 'origin': window.location.origin },
                 events: { 
                     'onReady': function(event) {
-                        event.target.playVideo(); // 로드 완료 시 자동 재생
+                        event.target.playVideo();
+                        waitForDurationAndFetch(videoId, statusBadge);
                     },
                     'onStateChange': onPlayerStateChange 
                 }
             });
         } else {
             player.loadVideoById(videoId);
+            waitForDurationAndFetch(videoId, statusBadge);
         }
+    }
 
-        const statusBadge = document.getElementById('stt-status');
-        statusBadge.className = 'status-badge status-loading';
-        statusBadge.innerText = window.i18nData[window.currentLang].apiAnalyzing;
-
-        try {
-            // 🚨 주의: 아래 주소를 본인의 Render 주소로 반드시 변경하세요!
-            const RENDER_API_URL = 'https://syncnlink.onrender.com/api/stt'; 
-
-            const response = await fetch(RENDER_API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ videoId: videoId, lang: window.currentLang })
-            });
+    // 💡 핵심: 영상 메타데이터(길이)가 로드될 때까지 기다렸다가 API 호출
+    function waitForDurationAndFetch(videoId, statusBadge) {
+        let attempts = 0;
+        const checkDuration = setInterval(async () => {
+            attempts++;
+            const duration = player.getDuration();
             
-            if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(errData.detail || "서버 응답 오류");
+            if (duration > 0) {
+                clearInterval(checkDuration);
+                statusBadge.innerText = window.i18nData[window.currentLang].apiAnalyzing;
+                
+                try {
+                    // Render 주소 적용
+                    const RENDER_API_URL = 'https://syncnlink.onrender.com/api/stt'; 
+
+                    const response = await fetch(RENDER_API_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            videoId: videoId, 
+                            lang: window.currentLang,
+                            duration: duration // 프론트엔드에서 구한 정확한 영상 길이 전달
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        const errData = await response.json();
+                        throw new Error(errData.detail || "서버 응답 오류");
+                    }
+                    
+                    const result = await response.json();
+                    window.currentSTTData = result.data;
+                    statusBadge.className = 'status-badge status-live';
+                    statusBadge.innerText = window.i18nData[window.currentLang].apiSyncing;
+                    updateSync();
+                } catch (error) {
+                    console.error("STT Error:", error);
+                    statusBadge.className = 'status-badge status-error';
+                    statusBadge.innerText = "오류 발생";
+                    document.getElementById('subtitle-content').innerHTML = `<p class="placeholder" style="color: #ff7675;">${error.message}</p>`;
+                }
+            } else if (attempts > 50) { // 5초 초과 시 타임아웃
+                clearInterval(checkDuration);
+                statusBadge.className = 'status-badge status-error';
+                statusBadge.innerText = "영상 정보 로드 실패";
+                alert("영상의 길이를 가져오지 못했습니다. 다시 시도해주세요.");
             }
-            
-            const result = await response.json();
-            window.currentSTTData = result.data;
-            statusBadge.className = 'status-badge status-live';
-            statusBadge.innerText = window.i18nData[window.currentLang].apiSyncing;
-            updateSync();
-        } catch (error) {
-            console.error("STT Error:", error);
-            statusBadge.className = 'status-badge status-error';
-            statusBadge.innerText = window.i18nData[window.currentLang].apiError + " (" + error.message + ")";
-        }
+        }, 100);
     }
 
     function onPlayerStateChange(event) {
@@ -348,9 +372,7 @@
         const container = document.getElementById('subtitle-content');
 
         if (sub) {
-            // ❌ 기존 코드: let html = sub.original;
-            let html = sub.text || sub.original || ""; // ✅ 변경: text 키를 우선적으로 찾도록 수정
-            
+            let html = sub.original;
             window.archiveDb.forEach(wiki => {
                 if (wiki.keyword && wiki.keyword.trim() !== "") {
                     const regex = new RegExp(`(${wiki.keyword})`, "gi");
