@@ -4,3 +4,4 @@ firebase-admin==6.2.0
 google-genai>=0.1.0
 requests
 uvicorn
+pytubefix
