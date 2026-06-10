@@ -44,14 +44,14 @@ app.add_middleware(
 class STTRequest(BaseModel):
     videoId: str
     lang: str
-    duration: float  # 💡 프론트엔드에서 전달받는 정확한 원본 영상 길이
+    duration: float
 
 RATE_LIMIT_DELAY = 65
 
 @app.post("/api/stt")
 async def process_stt(request: STTRequest):
     video_id = request.videoId
-    original_duration = request.duration # 프론트엔드에서 받은 길이 사용
+    original_duration = request.duration
 
     if not db:
         raise HTTPException(status_code=500, detail="Firebase DB initialization failed")
@@ -78,7 +78,7 @@ async def process_stt(request: STTRequest):
             "Content-Type": "application/json"
         }
 
-        max_ad_retries = 5 # 광고 추출 시 최대 재시도 횟수 증가
+        max_ad_retries = 5
         valid_audio_downloaded = False
 
         for ad_attempt in range(max_ad_retries):
@@ -112,21 +112,38 @@ async def process_stt(request: STTRequest):
             with open(audio_path, 'wb') as f:
                 f.write(audio_data)
 
-            # 다운로드된 음원 길이 검증
+            # 🚨 다운로드된 음원 길이 및 파일 유효성 검증
+            downloaded_duration = 0.0
             try:
+                file_size = os.path.getsize(audio_path)
+                if file_size < 50000: # 50KB 미만이면 비정상 파일(에러 페이지 등)로 간주
+                    raise Exception(f"파일 크기가 너무 작습니다 ({file_size} bytes). 정상적인 음원이 아닙니다.")
+
                 audio_file_meta = File(audio_path)
-                downloaded_duration = audio_file_meta.info.length if audio_file_meta else 0.0
+                if audio_file_meta and hasattr(audio_file_meta, 'info'):
+                    downloaded_duration = audio_file_meta.info.length
+                else:
+                    raise Exception("mutagen이 음원 메타데이터를 읽지 못했습니다.")
+                    
                 print(f"🎵 다운로드된 음원 길이: {downloaded_duration:.2f}초")
             except Exception as e:
-                print(f"⚠️ 음원 길이 분석 실패: {e}")
+                print(f"⚠️ 음원 검증 실패: {e}")
                 downloaded_duration = 0.0
 
-            # 🚨 검증 로직: 다운로드된 음원이 원본보다 15초 이상 짧거나, 원본 길이의 80% 미만이면 광고로 간주
-            if original_duration > 0 and downloaded_duration > 0:
+            # 🚨 논리 오류 수정: 길이가 0이거나 비정상 파일이면 무조건 거름
+            if downloaded_duration == 0.0:
+                print("🚫 [오류 감지] 정상적인 음원 파일이 아닙니다. 폐기하고 재시도합니다.")
+                if os.path.exists(audio_path):
+                    os.remove(audio_path)
+                time.sleep(3)
+                continue
+
+            # 🚨 광고 필터링: 원본보다 15초 이상 짧거나 80% 미만이면 거름
+            if original_duration > 0:
                 if downloaded_duration < (original_duration - 15) or downloaded_duration < (original_duration * 0.8):
                     print(f"🚫 [광고 감지] 원본({original_duration}초)에 비해 음원({downloaded_duration:.2f}초)이 너무 짧습니다. 광고로 간주하고 폐기합니다.")
                     os.remove(audio_path)
-                    time.sleep(3) # 3초 지연 후 재요청
+                    time.sleep(3)
                     continue
             
             print("✅ 정상적인 본 영상 음원으로 판별되었습니다.")
@@ -145,7 +162,6 @@ async def process_stt(request: STTRequest):
 
         lang_name = "Korean" if request.lang == "ko" else "English"
         
-        # 💡 프롬프트 수정: JSON 키를 프론트엔드와 동일하게 "original"로 변경
         prompt = (
             f"Listen to the attached audio. If the audio is in another language, TRANSLATE the meaning to {lang_name}. "
             f"If it is already in {lang_name}, TRANSCRIBE it. "
