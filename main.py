@@ -11,7 +11,7 @@ import traceback
 import requests
 import time
 import re
-from mutagen import File  # 음원 길이 측정을 위한 라이브러리
+from mutagen import File
 
 if not firebase_admin._apps:
     try:
@@ -44,31 +44,14 @@ app.add_middleware(
 class STTRequest(BaseModel):
     videoId: str
     lang: str
+    duration: float  # 💡 프론트엔드에서 전달받는 정확한 원본 영상 길이
 
 RATE_LIMIT_DELAY = 65
-
-# 🚨 yt-dlp 없이 순수 requests와 정규식으로 원본 영상 길이 추출
-def get_original_video_duration(video_id: str) -> float:
-    try:
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            # 유튜브 HTML 소스코드 내부에 있는 "lengthSeconds":"초" 데이터를 정규식으로 추출
-            match = re.search(r'"lengthSeconds":"(\d+)"', response.text)
-            if match:
-                return float(match.group(1))
-    except Exception as e:
-        print(f"⚠️ 원본 영상 길이 추출 실패 (무시하고 진행): {e}")
-    
-    return 0.0
 
 @app.post("/api/stt")
 async def process_stt(request: STTRequest):
     video_id = request.videoId
+    original_duration = request.duration # 프론트엔드에서 받은 길이 사용
 
     if not db:
         raise HTTPException(status_code=500, detail="Firebase DB initialization failed")
@@ -84,9 +67,7 @@ async def process_stt(request: STTRequest):
     formatted_data = None
 
     try:
-        # [STEP 0] 원본 영상 길이 확인 (yt-dlp 미사용)
-        original_duration = get_original_video_duration(video_id)
-        print(f"📺 원본 영상 길이: {original_duration}초")
+        print(f"📺 프론트엔드에서 전달받은 원본 영상 길이: {original_duration}초")
 
         print(f"[STEP 1] Downloading audio via RapidAPI: {video_id}")
         rapid_api_url = "https://youtube-convert-mp3-m4a.p.rapidapi.com/v1/social/youtube/audio"
@@ -97,17 +78,15 @@ async def process_stt(request: STTRequest):
             "Content-Type": "application/json"
         }
 
-        max_ad_retries = 3 # 광고 추출 시 최대 재시도 횟수
+        max_ad_retries = 5 # 광고 추출 시 최대 재시도 횟수 증가
         valid_audio_downloaded = False
 
-        # 🚨 광고 필터링 및 재요청(Retry) 루프
         for ad_attempt in range(max_ad_retries):
             print(f"🔄 오디오 추출 시도 {ad_attempt + 1}/{max_ad_retries}...")
             
             audio_url = ""
             max_api_retries = 10
             
-            # API 링크 획득 루프
             for attempt in range(max_api_retries):
                 response = requests.post(rapid_api_url, headers=headers, json=payload)
                 try:
@@ -133,7 +112,7 @@ async def process_stt(request: STTRequest):
             with open(audio_path, 'wb') as f:
                 f.write(audio_data)
 
-            # 🚨 다운로드된 음원 길이 검증
+            # 다운로드된 음원 길이 검증
             try:
                 audio_file_meta = File(audio_path)
                 downloaded_duration = audio_file_meta.info.length if audio_file_meta else 0.0
@@ -142,15 +121,14 @@ async def process_stt(request: STTRequest):
                 print(f"⚠️ 음원 길이 분석 실패: {e}")
                 downloaded_duration = 0.0
 
-            # 검증 로직: 원본 길이가 확인되었고, 다운로드된 음원이 원본보다 15초 이상 짧다면 광고로 간주
+            # 🚨 검증 로직: 다운로드된 음원이 원본보다 15초 이상 짧거나, 원본 길이의 80% 미만이면 광고로 간주
             if original_duration > 0 and downloaded_duration > 0:
-                if downloaded_duration < (original_duration - 15):
+                if downloaded_duration < (original_duration - 15) or downloaded_duration < (original_duration * 0.8):
                     print(f"🚫 [광고 감지] 원본({original_duration}초)에 비해 음원({downloaded_duration:.2f}초)이 너무 짧습니다. 광고로 간주하고 폐기합니다.")
-                    os.remove(audio_path) # 잘못된 파일 폐기
-                    time.sleep(2) # 2초 지연 후 재요청 (세션 타이밍 변경)
-                    continue # 다음 시도로 넘어감
+                    os.remove(audio_path)
+                    time.sleep(3) # 3초 지연 후 재요청
+                    continue
             
-            # 검증 통과 시 루프 탈출
             print("✅ 정상적인 본 영상 음원으로 판별되었습니다.")
             valid_audio_downloaded = True
             break
@@ -167,15 +145,16 @@ async def process_stt(request: STTRequest):
 
         lang_name = "Korean" if request.lang == "ko" else "English"
         
+        # 💡 프롬프트 수정: JSON 키를 프론트엔드와 동일하게 "original"로 변경
         prompt = (
             f"Listen to the attached audio. If the audio is in another language, TRANSLATE the meaning to {lang_name}. "
             f"If it is already in {lang_name}, TRANSCRIBE it. "
             f"CRITICAL INSTRUCTIONS: "
             f"1. The audio might begin with a random YouTube pre-roll advertisement (e.g., fitness, product ads). IGNORE ALL ADVERTISEMENTS completely. "
             f"2. ONLY transcribe/translate the main content (e.g., movie scenes, music, actual content). "
-            f"3. Base your output STRICTLY on the actual audio. Do NOT hallucinate, guess, or create dummy text (like '유라 씨...'). "
+            f"3. Base your output STRICTLY on the actual audio. Do NOT hallucinate, guess, or create dummy text. "
             f"4. If the audio is 100% advertisement or contains no main speech, return an empty array []. "
-            f"Return strictly as a valid JSON array: [{{\"start\": 0.0, \"end\": 1.5, \"text\": \"actual speech\"}}]"
+            f"Return strictly as a valid JSON array: [{{\"start\": 0.0, \"end\": 1.5, \"original\": \"actual speech\"}}]"
         )
 
         models_to_try = [
